@@ -23,6 +23,15 @@ Compose custom pool behavior from **22 standardized building blocks** (`17 core 
 
 ---
 
+## Security & Audit Disclosure
+
+> [!WARNING]
+> **Agentic Audit Only — No Independent Human Audit Yet**
+>
+> HookRig has undergone **agentic security auditing** (automated multi-agent adversarial review, invariant verification, and stateful property-based fuzzing with Echidna, Medusa, and Foundry) and all identified findings have been remediated. However, this codebase **has not yet been audited by an independent human security firm**. Use in production environments with real funds is at your own risk until a formal third-party human audit is completed.
+
+---
+
 ## Quickstart
 
 ```bash
