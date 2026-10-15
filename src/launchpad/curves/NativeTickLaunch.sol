@@ -8,6 +8,8 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/utils/CurrencySettler.sol";
 import {ITokenLaunchpad} from "../../interfaces/ITokenLaunchpad.sol";
 import {IHookRigOrchestrator} from "../../interfaces/IHookRigOrchestrator.sol";
@@ -53,7 +55,7 @@ contract NativeTickLaunch is ITokenLaunchpad, IUnlockCallback {
         launchState = LaunchState.Graduated;
 
         poolManager.initialize(_poolKey, _config.initialSqrtPriceX96);
-        hookOrchestrator.notifyPoolGraduated(poolId);
+        IHookRigOrchestrator(address(_poolKey.hooks)).notifyPoolGraduated(poolId);
 
         if (_config.bands.length > 0) {
             poolManager.unlock(abi.encode(_config.bands));
@@ -68,12 +70,17 @@ contract NativeTickLaunch is ITokenLaunchpad, IUnlockCallback {
 
         for (uint256 i = 0; i < bands.length; i++) {
             if (bands[i].tokenAmount == 0) continue;
+            uint160 sqrtPriceLowerX96 = TickMath.getSqrtPriceAtTick(bands[i].tickLower);
+            uint160 sqrtPriceUpperX96 = TickMath.getSqrtPriceAtTick(bands[i].tickUpper);
+            uint128 liq =
+                LiquidityAmounts.getLiquidityForAmount1(sqrtPriceLowerX96, sqrtPriceUpperX96, bands[i].tokenAmount);
+            if (liq == 0) continue;
             (BalanceDelta callerDelta,) = poolManager.modifyLiquidity(
                 poolKey,
                 ModifyLiquidityParams({
                     tickLower: bands[i].tickLower,
                     tickUpper: bands[i].tickUpper,
-                    liquidityDelta: int256(uint256(bands[i].tokenAmount)),
+                    liquidityDelta: int256(uint256(liq)),
                     salt: bytes32(i)
                 }),
                 ""

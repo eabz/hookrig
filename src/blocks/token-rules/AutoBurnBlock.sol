@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
@@ -38,7 +39,10 @@ library AutoBurnLogic {
 
         if (configs[poolId].useTokenBurnCall && !currency.isAddressZero()) {
             manager.take(currency, address(this), burnAmount);
-            ERC20Burnable(Currency.unwrap(currency)).burn(burnAmount);
+            try ERC20Burnable(Currency.unwrap(currency)).burn(burnAmount) {}
+            catch {
+                IERC20(Currency.unwrap(currency)).transfer(DEAD_ADDRESS, burnAmount);
+            }
         } else {
             manager.take(currency, DEAD_ADDRESS, burnAmount);
         }

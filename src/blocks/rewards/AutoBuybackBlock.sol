@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
 library AutoBuybackLogic {
@@ -22,6 +23,7 @@ library AutoBuybackLogic {
     );
 
     error AutoBuybackFeeExceedsCap(uint16 requestedBps);
+    error InvalidAutoBuybackFloorTick(int24 triggerFloorTick);
 
     function init(
         mapping(PoolId => AutoBuybackState) storage states,
@@ -30,6 +32,9 @@ library AutoBuybackLogic {
     ) external {
         if (params.buybackFeeBps > MAX_AUTO_BUYBACK_BPS) {
             revert AutoBuybackFeeExceedsCap(params.buybackFeeBps);
+        }
+        if (params.triggerFloorTick < TickMath.MIN_TICK || params.triggerFloorTick > TickMath.MAX_TICK) {
+            revert InvalidAutoBuybackFloorTick(params.triggerFloorTick);
         }
         AutoBuybackState storage st = states[poolId];
         st.buybackFeeBps = params.buybackFeeBps;
@@ -44,6 +49,7 @@ library AutoBuybackLogic {
         Currency cutCurrency,
         uint256 cutAmount,
         int24 postSwapTick,
+        bool isToken0ProjectToken,
         bool hasActiveLiquidity
     ) external returns (uint256 deployedToFloor) {
         AutoBuybackState storage st = states[poolId];
@@ -53,10 +59,10 @@ library AutoBuybackLogic {
             emit BuybackReserveAccumulated(poolId, cutCurrency, cutAmount, newReserve);
         }
 
-        if (
-            hasActiveLiquidity && st.minBuybackReserve > 0 && newReserve >= st.minBuybackReserve
-                && postSwapTick <= st.triggerFloorTick
-        ) {
+        bool isBelowFloor =
+            isToken0ProjectToken ? (postSwapTick >= st.triggerFloorTick) : (postSwapTick <= st.triggerFloorTick);
+
+        if (hasActiveLiquidity && st.minBuybackReserve > 0 && newReserve >= st.minBuybackReserve && isBelowFloor) {
             deployedToFloor = newReserve;
             st.reserveByCurrency[cutCurrency] = 0;
             st.totalFloorDefendedAmount += deployedToFloor;
@@ -82,10 +88,11 @@ abstract contract AutoBuybackBlock is IHookRigBlock {
         Currency cutCurrency,
         uint256 cutAmount,
         int24 postSwapTick,
+        bool isToken0ProjectToken,
         bool hasActiveLiquidity
     ) internal returns (uint256 deployedToFloor) {
         return AutoBuybackLogic.accumulateAndCheckTrigger(
-            _autoBuybackStates, poolId, cutCurrency, cutAmount, postSwapTick, hasActiveLiquidity
+            _autoBuybackStates, poolId, cutCurrency, cutAmount, postSwapTick, isToken0ProjectToken, hasActiveLiquidity
         );
     }
 }

@@ -12,6 +12,7 @@ library MEVProtectionLogic {
     }
 
     error SwapPriceImpactExceeded(int24 tickDelta, int24 maxAllowed);
+    error InvalidMEVProtectionConfig(int24 maxTickDeltaPerSwap);
 
     function enforceAfterSwap(
         mapping(PoolId => MEVProtectionState) storage states,
@@ -23,9 +24,16 @@ library MEVProtectionLogic {
         MEVProtectionState storage state = states[poolId];
         int24 maxDelta = state.maxTickDeltaPerSwap;
         if (maxDelta > 0) {
-            int24 delta = postSwapTick >= preSwapTick ? postSwapTick - preSwapTick : preSwapTick - postSwapTick;
-            if (delta > maxDelta) {
-                revert SwapPriceImpactExceeded(delta, maxDelta);
+            int256 delta = postSwapTick >= preSwapTick
+                ? int256(postSwapTick) - int256(preSwapTick)
+                : int256(preSwapTick) - int256(postSwapTick);
+            if (delta > int256(maxDelta)) {
+                int24 clampedDelta = delta > int256(type(int24).max) ? type(int24).max : int24(delta);
+                revert SwapPriceImpactExceeded(clampedDelta, maxDelta);
+            }
+            if (state.lastSwapBlock == uint32(block.number) && state.lastSwapZeroForOne != zeroForOne) {
+                int24 clampedDelta = delta > int256(type(int24).max) ? type(int24).max : int24(delta);
+                revert SwapPriceImpactExceeded(clampedDelta, maxDelta);
             }
         }
         state.lastSwapBlock = uint32(block.number);
@@ -41,8 +49,16 @@ abstract contract MEVProtectionBlock is JITGuardBlock {
     mapping(PoolId poolId => MEVProtectionLogic.MEVProtectionState state) internal _mevStates;
 
     error SwapPriceImpactExceeded(int24 tickDelta, int24 maxAllowed);
+    error InvalidMEVProtectionConfig(int24 maxTickDeltaPerSwap);
 
     function _initMEVProtection(PoolId poolId, MEVProtectionParams calldata params) internal {
+        if (
+            params.maxTickDeltaPerSwap < 0
+                || (params.maxTickDeltaPerSwap > 0 && params.maxTickDeltaPerSwap < 10)
+                || params.maxTickDeltaPerSwap > 887_272
+        ) {
+            revert InvalidMEVProtectionConfig(params.maxTickDeltaPerSwap);
+        }
         _mevStates[poolId] = MEVProtectionLogic.MEVProtectionState({
             maxTickDeltaPerSwap: params.maxTickDeltaPerSwap, lastSwapBlock: 0, lastSwapZeroForOne: false
         });

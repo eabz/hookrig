@@ -22,7 +22,7 @@ library AccessControlLogic {
         if (allowlisted[poolId][user]) return;
 
         bytes32 root = cfg.merkleRoot;
-        if (root != bytes32(0) && hookData.length >= 64) {
+        if (root != bytes32(0) && hookData.length >= 32) {
             bytes32 computedHash = keccak256(bytes.concat(keccak256(abi.encode(user))));
             uint256 count = (hookData.length - 32) / 32;
             for (uint256 i = 0; i < count; i++) {
@@ -51,7 +51,7 @@ abstract contract AccessControlBlock is IHookRigBlock {
 
     error UnauthorizedAccessControlManager(address caller);
 
-    function _initAccessControl(PoolId poolId, AccessControlParams calldata params) internal {
+    function _initAccessControl(PoolId poolId, AccessControlParams memory params) internal {
         _accessConfigs[poolId] = params;
     }
 

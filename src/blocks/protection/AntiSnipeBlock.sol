@@ -7,6 +7,8 @@ import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
 library AntiSnipeLogic {
     uint24 internal constant MAX_ANTI_SNIPE_LAUNCH_FEE = 800_000; // 80.00%
+    uint24 internal constant MAX_ANTI_SNIPE_NORMAL_FEE = 50_000; // 5.00%
+    uint32 internal constant MAX_ANTI_SNIPE_DECAY_BLOCKS = 50_400; // ~7 days
 
     struct AntiSnipeState {
         uint24 launchFee;
@@ -22,7 +24,10 @@ library AntiSnipeLogic {
         PoolId poolId,
         IHookRigBlock.AntiSnipeParams calldata params
     ) external {
-        if (params.launchFee < params.normalFee || params.launchFee > MAX_ANTI_SNIPE_LAUNCH_FEE) {
+        if (
+            params.launchFee < params.normalFee || params.launchFee > MAX_ANTI_SNIPE_LAUNCH_FEE
+                || params.normalFee > MAX_ANTI_SNIPE_NORMAL_FEE || params.decayBlocks > MAX_ANTI_SNIPE_DECAY_BLOCKS
+        ) {
             revert InvalidAntiSnipeConfig(params.launchFee, params.normalFee);
         }
         states[poolId] = AntiSnipeState({

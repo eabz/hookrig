@@ -8,6 +8,7 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 library TransientContext {
     bytes32 private constant SNAPSHOT_NAMESPACE = keccak256("hookrig.transient.swapSnapshot.v1");
     bytes32 private constant INTERNAL_EXEC_NAMESPACE = keccak256("hookrig.transient.internalExec.v1");
+    bytes32 private constant WALLET_CAP_NAMESPACE = keccak256("hookrig.transient.walletCapBalance.v1");
 
     struct PreSwapSnapshot {
         uint160 sqrtPriceX96;
@@ -53,5 +54,19 @@ library TransientContext {
             val := tload(slot)
         }
         active = (val == 1);
+    }
+
+    function getWalletCapExpectedBalance(PoolId poolId, address user) internal view returns (uint256 bal) {
+        bytes32 slot = keccak256(abi.encodePacked(WALLET_CAP_NAMESPACE, PoolId.unwrap(poolId), user));
+        assembly ("memory-safe") {
+            bal := tload(slot)
+        }
+    }
+
+    function setWalletCapExpectedBalance(PoolId poolId, address user, uint256 bal) internal {
+        bytes32 slot = keccak256(abi.encodePacked(WALLET_CAP_NAMESPACE, PoolId.unwrap(poolId), user));
+        assembly ("memory-safe") {
+            tstore(slot, bal)
+        }
     }
 }

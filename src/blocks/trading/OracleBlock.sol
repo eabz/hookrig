@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
 library OracleLogic {
@@ -28,13 +29,20 @@ library OracleLogic {
         uint32 elapsed = currentTs - obs.blockTimestamp;
         if (elapsed == 0) return;
 
-        int24 diff = currentTick - obs.lastTick;
-        int24 maxChange = int24(int256(uint256(elapsed)) * int256(MAX_ORACLE_TICK_DELTA_PER_SEC));
+        int256 diff = int256(currentTick) - int256(obs.lastTick);
+        int256 maxChange = int256(uint256(elapsed)) * int256(MAX_ORACLE_TICK_DELTA_PER_SEC);
+        int256 nextTick = int256(currentTick);
         if (diff > maxChange) {
-            currentTick = obs.lastTick + maxChange;
+            nextTick = int256(obs.lastTick) + maxChange;
         } else if (diff < -maxChange) {
-            currentTick = obs.lastTick - maxChange;
+            nextTick = int256(obs.lastTick) - maxChange;
         }
+        if (nextTick > int256(TickMath.MAX_TICK)) {
+            nextTick = int256(TickMath.MAX_TICK);
+        } else if (nextTick < int256(TickMath.MIN_TICK)) {
+            nextTick = int256(TickMath.MIN_TICK);
+        }
+        currentTick = int24(nextTick);
 
         obs.tickCumulative += int56(currentTick) * int56(uint56(elapsed));
         obs.lastTick = currentTick;
@@ -64,5 +72,20 @@ abstract contract OracleBlock is IHookRigBlock {
     function getOracleTickCumulative(PoolId poolId) external view returns (int24 lastTick, int56 tickCumulative) {
         OracleLogic.OracleObservation storage obs = _oracleObservations[poolId];
         return (obs.lastTick, obs.tickCumulative);
+    }
+
+    function observeOracleAtCurrentTime(PoolId poolId)
+        external
+        view
+        returns (int24 lastTick, int56 extrapolatedTickCumulative, uint32 lastTimestamp)
+    {
+        OracleLogic.OracleObservation storage obs = _oracleObservations[poolId];
+        lastTick = obs.lastTick;
+        lastTimestamp = obs.blockTimestamp;
+        extrapolatedTickCumulative = obs.tickCumulative;
+        if (obs.initialized && uint32(block.timestamp) > obs.blockTimestamp) {
+            uint32 elapsed = uint32(block.timestamp) - obs.blockTimestamp;
+            extrapolatedTickCumulative += int56(obs.lastTick) * int56(uint56(elapsed));
+        }
     }
 }

@@ -236,7 +236,7 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         });
         cfg.lpRewards = IHookRigBlock.LPRewardsParams({extraBuyFeeBps: 500});
         cfg.kingOfThePool = IHookRigBlock.KingOfThePoolParams({
-            potFeeOnBuyBps: 500, roundDurationSeconds: 3600, minBuyAmountForReset: 1 ether
+            potFeeOnBuyBps: 495, roundDurationSeconds: 3600, minBuyAmountForReset: 1 ether
         });
 
         (PoolKey memory key,) = _initPoolWithStack(cfg);
@@ -256,7 +256,7 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
             | HookPermissionMasks.BIT_FEE_SHARING | HookPermissionMasks.BIT_LP_REWARDS
             | HookPermissionMasks.BIT_KING_OF_THE_POOL | HookPermissionMasks.BIT_AUTO_BUYBACK;
 
-        // 1000 + 500 + 500 + 500 + 500 + 500 = 3500 bps (> 2500 bps ceiling)
+        // Directional buyBps = 5 (royalty) + 1000 (buyTax) + 500 (autoBurn) + 500 (feeSharing) + 500 (lpRewards) + 500 (kingOfThePool) = 3005 bps (> 2500 bps ceiling)
         cfg.buySellTax = IHookRigBlock.BuySellTaxParams({
             buyTaxBps: 1000, sellTaxBps: 1000, taxRecipient: treasury, decayOnly: false
         });
@@ -273,7 +273,7 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
 
         PoolKey memory key = _defaultPoolKey(IHooks(address(orchestrator)));
         vm.expectRevert(
-            abi.encodeWithSelector(IHookRigOrchestrator.AggregateReturnDeltaBpsExceeded.selector, 3500, 2500)
+            abi.encodeWithSelector(IHookRigOrchestrator.AggregateReturnDeltaBpsExceeded.selector, 3505, 2500)
         );
         orchestrator.registerPoolStack(key, cfg);
     }
@@ -343,15 +343,16 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         vm.expectRevert(abi.encodeWithSelector(IHookRigOrchestrator.PoolAlreadyConfigured.selector, poolId));
         orchestrator.registerPoolStack(key, cfg);
 
-        // Disable trusted router status on `router` -> `_resolveUser` falls back to `hookData` or `routerSender`
+        // Disable trusted router status on `router` -> `_resolveUser` ignores `hookData[:32]` and attributes to `routerSender`
         vm.prank(owner);
         orchestrator.setTrustedRouter(address(router), false);
 
-        // Pass `carol` encoded in hookData[:32]
+        // Pass `carol` encoded in hookData[:32]: untrusted router cannot spoof `carol`!
         _swapExactIn(alice, key, true, 100 ether, abi.encode(carol));
-        assertGt(orchestrator.swapRewardPoints(poolId, carol), 0);
+        assertEq(orchestrator.swapRewardPoints(poolId, carol), 0);
+        assertGt(orchestrator.swapRewardPoints(poolId, address(router)), 0);
 
-        // Empty hookData falls back to router address
+        // Empty hookData also attributes to router address
         _swapExactIn(alice, key, true, 100 ether, "");
         assertGt(orchestrator.swapRewardPoints(poolId, address(router)), 0);
     }
@@ -401,13 +402,19 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         vm.expectRevert(abi.encodeWithSelector(HookRigBase.OnlyAuthorizedCurve.selector, alice));
         orchestrator.seedKingPotFromLaunchCurve(poolId, currency0, 100 ether);
 
-        // 3. Authorized launchpadFactory can call seedKingPotFromLaunchCurve
+        // 3. Authorized launchpadFactory can call seedKingPotFromLaunchCurve:
+        //    - Project currency (`currency1`) seeds the KingOfThePool pot directly
+        //    - Quote currency (`currency0`) credits the pool admin's (`address(this)`) ERC-6909 claim ledger so currencies never mix
         vm.prank(address(launchpadFactory));
-        orchestrator.seedKingPotFromLaunchCurve(poolId, currency0, 0);
+        orchestrator.seedKingPotFromLaunchCurve(poolId, currency1, 0);
         vm.prank(address(launchpadFactory));
-        orchestrator.seedKingPotFromLaunchCurve(poolId, currency0, 50 ether);
+        orchestrator.seedKingPotFromLaunchCurve(poolId, currency1, 50 ether);
         (,, uint256 pot,) = orchestrator.getCurrentKing(poolId);
         assertEq(pot, 50 ether);
+
+        vm.prank(address(launchpadFactory));
+        orchestrator.seedKingPotFromLaunchCurve(poolId, currency0, 25 ether);
+        assertEq(orchestrator.poolClaims(poolId, currency0, address(this)), 25 ether);
 
         // 4. Withdrawing more claims than available reverts with InsufficientClaimBalance
         vm.prank(alice);
@@ -423,25 +430,32 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
     }
 
     // =========================================================================
-    // 3. Custom Block Combinations (All 22 Blocks Simultaneously & Intra-Group)
+    // 3. Custom Block Combinations (Tier 3 Mutex Enforcement & Multi-Block Stacks)
     // =========================================================================
 
-    /// @notice Proves that blocks are NOT limited to presets: enables ALL 22 blocks (`(1 << 22) - 1`)
-    ///         simultaneously in a single custom `PresetId.Blank` stack and executes the full pool lifecycle.
+    /// @notice Verifies that contradictory 22-block bitmaps revert with `InvalidBlockBitmap`, while a maximal
+    ///         compatible custom stack executes the full pool lifecycle cleanly.
     function test_CustomStack_All22BlocksSimultaneously_KitchenSink() public {
         IHookRigBlock.PoolStackConfig memory cfg;
         cfg.presetId = IHookRigBlock.PresetId.Blank;
-        cfg.enabledBlocksBitmap = uint32((uint256(1) << 22) - 1); // All 22 blocks active!
+
+        // 1. Contradictory all-22-blocks bitmap reverts with InvalidBlockBitmap
+        uint32 all22 = uint32((uint256(1) << 22) - 1);
+        cfg.enabledBlocksBitmap = all22;
+        PoolKey memory badKey = _defaultPoolKey(IHooks(address(orchestrator)));
+        vm.expectRevert(abi.encodeWithSelector(IHookRigOrchestrator.InvalidBlockBitmap.selector, all22));
+        orchestrator.registerPoolStack(badKey, cfg);
+
+        // 2. Maximal compatible custom stack (14 simultaneous blocks across Fees, Protection, Token Rules, Rewards & Oracle)
+        cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_DYNAMIC_FEE | HookPermissionMasks.BIT_ANTI_SNIPE
+            | HookPermissionMasks.BIT_ARB_RECAPTURE | HookPermissionMasks.BIT_JIT_GUARD
+            | HookPermissionMasks.BIT_WALLET_CAP | HookPermissionMasks.BIT_BUY_SELL_TAX
+            | HookPermissionMasks.BIT_AUTO_BURN | HookPermissionMasks.BIT_FEE_SHARING
+            | HookPermissionMasks.BIT_LP_REWARDS | HookPermissionMasks.BIT_SWAP_REWARDS
+            | HookPermissionMasks.BIT_KING_OF_THE_POOL | HookPermissionMasks.BIT_REFERRAL_SPLIT
+            | HookPermissionMasks.BIT_AUTO_BUYBACK | HookPermissionMasks.BIT_ORACLE;
 
         cfg.dynamicFee = IHookRigBlock.DynamicFeeParams({baseFee: 2000, maxFee: 10_000, volatilityTickThreshold: 50});
-        cfg.managedFee = IHookRigBlock.ManagedFeeParams({startingFee: 2500, feeCap: 15_000, manager: owner});
-        cfg.marketHoursFee = IHookRigBlock.MarketHoursFeeParams({
-            openHourUtc: 13,
-            closeHourUtc: 20,
-            openFee: 1500,
-            closedFee: 4000,
-            weekendClosed: true
-        });
         cfg.antiSnipe = IHookRigBlock.AntiSnipeParams({launchFee: 30_000, normalFee: 2000, decayBlocks: 10});
         cfg.mevProtection = IHookRigBlock.MEVProtectionParams({
             maxTickDeltaPerSwap: 500,
@@ -449,12 +463,6 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
             jitExitPenaltyBps: 100
         });
         cfg.arbRecapture = IHookRigBlock.ArbRecaptureParams({recaptureShareBps: 1000, arbTriggerTickDelta: 10});
-        cfg.accessControl = IHookRigBlock.AccessControlParams({
-            checkBeforeAddLiquidity: true,
-            checkBeforeSwap: true,
-            merkleRoot: bytes32(0),
-            manager: owner
-        });
         cfg.walletCap = IHookRigBlock.WalletCapParams({maxWalletBps: 5000, sunsetBlocks: 100});
         cfg.buySellTax = IHookRigBlock.BuySellTaxParams({
             buyTaxBps: 100,
@@ -476,9 +484,7 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
             roundDurationSeconds: 600,
             minBuyAmountForReset: 10 ether
         });
-        cfg.circuitBreaker = IHookRigBlock.CircuitBreakerParams({maxWindowTickDeviation: 500, windowSeconds: 300});
         cfg.referralSplit = IHookRigBlock.ReferralSplitParams({referralFeeBps: 100});
-        cfg.vestingSellCap = IHookRigBlock.VestingSellCapParams({maxDailySellBps: 2000});
         cfg.autoBuyback = IHookRigBlock.AutoBuybackParams({
             buybackFeeBps: 100,
             triggerFloorTick: -5,
@@ -486,32 +492,18 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         });
 
         (PoolKey memory key, PoolId poolId) = _initPoolWithStack(cfg);
-
-        // Allowlist test contract, alice, and bob
-        vm.startPrank(owner);
-        orchestrator.setAllowlistAccount(poolId, address(this), true);
-        orchestrator.setAllowlistAccount(poolId, alice, true);
-        orchestrator.setAllowlistAccount(poolId, bob, true);
-        vm.stopPrank();
-
         _seedFullRangeLiquidity(key, 1_000_000 ether);
 
-        // Register referrer, place limit order & TWAMM order
+        // Register referrer
         vm.prank(alice);
         orchestrator.registerReferrer(poolId, bob);
-        vm.prank(alice);
-        uint256 limOrder = orchestrator.placeLimitOrder(key, -60, true, 50 ether);
-        vm.prank(alice);
-        orchestrator.submitTWAMMOrder(key, true, 360 ether, 360);
 
-        // Execute buy & sell swaps through all 22 active blocks
+        // Execute buy & sell swaps through all 14 active blocks
         vm.warp(block.timestamp + 60);
         _swapExactIn(alice, key, true, 500 ether, "");
         _swapExactIn(bob, key, false, 200 ether, "");
 
-        // Cancel unfilled limit order and remove LP after hold blocks
-        vm.prank(alice);
-        orchestrator.cancelLimitOrder(key, limOrder);
+        // Remove LP after hold blocks
         vm.roll(block.number + 3);
         router.modifyLiquidity(
             key,
@@ -520,13 +512,20 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         );
     }
 
-    /// @notice Verifies deterministic intra-group fee precedence when all 4 fee blocks are combined in a custom stack.
+    /// @notice Verifies base-fee mutual exclusion and deterministic intra-group fee precedence (`AntiSnipe` + `MarketHoursFee`).
     function test_CustomStack_MultiFeeBlockPrecedenceWaterfall() public {
         IHookRigBlock.PoolStackConfig memory cfg;
-        cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_DYNAMIC_FEE | HookPermissionMasks.BIT_MANAGED_FEE
+
+        // 1. Combining multiple base fee engines reverts with InvalidBlockBitmap
+        uint32 multiBaseFee = HookPermissionMasks.BIT_DYNAMIC_FEE | HookPermissionMasks.BIT_MANAGED_FEE
             | HookPermissionMasks.BIT_MARKET_HOURS_FEE | HookPermissionMasks.BIT_ANTI_SNIPE;
-        cfg.dynamicFee = IHookRigBlock.DynamicFeeParams({baseFee: 1000, maxFee: 10_000, volatilityTickThreshold: 50});
-        cfg.managedFee = IHookRigBlock.ManagedFeeParams({startingFee: 2500, feeCap: 15_000, manager: owner});
+        cfg.enabledBlocksBitmap = multiBaseFee;
+        PoolKey memory badKey = _defaultPoolKey(IHooks(address(orchestrator)));
+        vm.expectRevert(abi.encodeWithSelector(IHookRigOrchestrator.InvalidBlockBitmap.selector, multiBaseFee));
+        orchestrator.registerPoolStack(badKey, cfg);
+
+        // 2. Valid combination: MarketHoursFee + AntiSnipe
+        cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_MARKET_HOURS_FEE | HookPermissionMasks.BIT_ANTI_SNIPE;
         cfg.marketHoursFee = IHookRigBlock.MarketHoursFeeParams({
             openHourUtc: 13,
             closeHourUtc: 20,
@@ -539,7 +538,7 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         (PoolKey memory key,) = _initPoolWithStack(cfg);
         _seedFullRangeLiquidity(key, 1_000_000 ether);
 
-        // At block 0, AntiSnipe (50,000) > MarketHours/Managed/Dynamic -> AntiSnipe wins
+        // At block 0, AntiSnipe (50,000) > MarketHoursFee -> AntiSnipe wins
         _swapExactIn(alice, key, true, 100 ether, "");
 
         // After 15 blocks, AntiSnipe decays to normalFee (1000), so MarketHoursFee takes over
@@ -615,9 +614,10 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         _swapExactIn(bob, key, true, 25_000 ether, "");
         _swapExactIn(alice, key, false, 1000 ether, "");
 
-        // Verify prior currency0 ERC-6909 reserve was burned and donated (0 stranded currency0 ERC-6909 claims)
-        assertEq(poolManager.balanceOf(address(orchestrator), currency0.toId()), 0);
-        assertGt(orchestrator.totalLPRewardsDonated(poolId), orcBalBefore);
+        // Verify prior currency0 ERC-6909 buyback reserve was burned and donated (only 5 bps protocol royalty claim remains)
+        uint256 royaltyClaim0 = orchestrator.poolClaims(poolId, currency0, orchestrator.PROTOCOL_ROYALTY_RECIPIENT());
+        assertEq(poolManager.balanceOf(address(orchestrator), currency0.toId()), royaltyClaim0);
+        assertGt(orchestrator.totalLPRewardsDonated(poolId), orcBalBefore - royaltyClaim0);
     }
 
     /// @notice Anti-Freeze #3: `JITGuard` and `CircuitBreaker` enforce hard upper ceilings on `minLPHoldBlocks`
@@ -627,14 +627,26 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_JIT_GUARD | HookPermissionMasks.BIT_CIRCUIT_BREAKER;
         cfg.mevProtection = IHookRigBlock.MEVProtectionParams({
             maxTickDeltaPerSwap: 0,
-            minLPHoldBlocks: type(uint32).max, // Attempt infinite LP lockup!
+            minLPHoldBlocks: type(uint32).max, // Attempt infinite LP lockup -> rejected at registration!
             jitExitPenaltyBps: 0
         });
         cfg.circuitBreaker = IHookRigBlock.CircuitBreakerParams({
             maxWindowTickDeviation: 20,
-            windowSeconds: type(uint32).max // Attempt 136-year circuit breaker freeze!
+            windowSeconds: 300
         });
 
+        PoolKey memory badKey = _defaultPoolKey(IHooks(address(orchestrator)));
+        vm.expectRevert();
+        orchestrator.registerPoolStack(badKey, cfg);
+
+        // Attempt 136-year circuit breaker freeze -> rejected at registration!
+        cfg.mevProtection.minLPHoldBlocks = 7200;
+        cfg.circuitBreaker.windowSeconds = type(uint32).max;
+        vm.expectRevert();
+        orchestrator.registerPoolStack(badKey, cfg);
+
+        // Register at the maximum allowed ceilings (7200 blocks / 86,400s)
+        cfg.circuitBreaker.windowSeconds = 86_400;
         (PoolKey memory key,) = _initPoolWithStack(cfg);
 
         vm.prank(alice);
@@ -644,7 +656,7 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
             ""
         );
 
-        // Advance 7201 blocks (just past the 7200-block hard cap) -> Alice can withdraw LP despite `type(uint32).max` config!
+        // Advance 7201 blocks (just past the 7200-block hard cap) -> Alice can withdraw LP!
         vm.roll(block.number + 7201);
         vm.prank(alice);
         router.modifyLiquidity(

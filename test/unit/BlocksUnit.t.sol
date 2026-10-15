@@ -184,7 +184,7 @@ contract BlocksUnitTest is HookRigTestBase {
 
     function test_Block05_And_18_MEVProtection_PriceImpactAndJITGuard() public {
         IHookRigBlock.PoolStackConfig memory cfg;
-        cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_MEV_PROTECTION | HookPermissionMasks.BIT_JIT_GUARD;
+        cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_MEV_PROTECTION;
         cfg.mevProtection =
             IHookRigBlock.MEVProtectionParams({maxTickDeltaPerSwap: 50, minLPHoldBlocks: 5, jitExitPenaltyBps: 100});
 
@@ -362,21 +362,34 @@ contract BlocksUnitTest is HookRigTestBase {
         (PoolKey memory key, PoolId poolId) = _initPoolWithStack(cfg);
         _seedFullRangeLiquidity(key, 1_000_000 ether);
 
-        // Buy swap -> 2% tax credited in currency1 to treasury
+        // Buy swap -> 2% tax credited in currency1 to treasury + 5 bps protocol royalty to PROTOCOL_ROYALTY_RECIPIENT
         _swapExactIn(alice, key, true, 1000 ether, "");
         uint256 claim1 = orchestrator.poolClaims(poolId, currency1, treasury);
         assertGt(claim1, 0);
+        assertGt(orchestrator.poolClaims(poolId, currency1, orchestrator.PROTOCOL_ROYALTY_RECIPIENT()), 0);
 
-        // Sell swap -> 3% tax credited in currency0 to treasury
+        // Sell swap -> 3% tax credited in currency0 to treasury + 5 bps protocol royalty to PROTOCOL_ROYALTY_RECIPIENT
         _swapExactIn(bob, key, false, 1000 ether, "");
         uint256 claim0 = orchestrator.poolClaims(poolId, currency0, treasury);
         assertGt(claim0, 0);
+        assertGt(orchestrator.poolClaims(poolId, currency0, orchestrator.PROTOCOL_ROYALTY_RECIPIENT()), 0);
 
-        // Treasury pulls ERC-6909 claims via withdrawClaim
+        // Treasury pulls ERC-6909 claims via withdrawClaim (including amount == 0 full-balance convenience withdrawal)
         uint256 balBefore = token1.balanceOf(treasury);
         vm.prank(treasury);
         orchestrator.withdrawClaim(poolId, currency1, claim1, treasury);
         assertEq(token1.balanceOf(treasury) - balBefore, claim1);
+
+        uint256 bal0Before = token0.balanceOf(treasury);
+        vm.prank(treasury);
+        orchestrator.withdrawClaim(poolId, currency0, 0, treasury);
+        assertEq(token0.balanceOf(treasury) - bal0Before, claim0);
+
+        // Pool admin (address(this)) can lower buy/sell tax on orchestrator via setBuySellTax; non-admin reverts
+        vm.prank(alice);
+        vm.expectRevert();
+        orchestrator.setBuySellTax(poolId, 100, 150, charity);
+        orchestrator.setBuySellTax(poolId, 100, 150, charity);
 
         // Revert on tax > 10% (1000 bps)
         PoolKey memory badKey = key;

@@ -162,22 +162,76 @@ Beyond external attacker exploits (`AV-01`–`AV-14`), stateful multi-hook proto
 
 ---
 
-## Custom Block Composition: Presets vs. All $2^{22} - 1$ Combinations
+## Custom Block Composition & The Tier 3 Mutual-Exclusion Matrix (`2,843` Valid Combinations)
 
-The 22 building blocks (`17 core + 5 expansion`) are **not** restricted to the 12 presets. Every block is an independent bit in `PoolStackConfig.enabledBlocksBitmap` (`bits 0..21`), meaning **all $2^{22} - 1 = 4,194,303$ non-empty block combinations** can be deployed via `PresetId.Blank` (or by starting from a preset and toggling additional bits).
+While the 22 building blocks (`17 core + 5 expansion`) represent $2^{22} - 1 = 4,194,303$ raw bitmaps, unconstrained combinations allow contradictory configurations (such as enabling two base fee models simultaneously, or pairing `MEVProtection`/`CircuitBreaker` swap reverts with `ArbRecapture`).
 
-### How Intra-Group & Cross-Group Combinations Resolve Without Conflict
+To prevent contradictory block interactions while supporting **all 12 curated Presets** and rich custom compositions, HookRig defines the **Tier 3 Mutual-Exclusion Matrix (`2,843` valid combinations — a 99.93% reduction from `4,194,303`)**:
 
-1. **Multiple Fee Blocks Enabled Simultaneously (`Group 1` + `AntiSnipe`)**:
-   - [`FeeAggregator.computeSwapFee`](../src/base/FeeAggregator.sol#L29-L63) resolves any subset of `{AntiSnipe, MarketHoursFee, ManagedFee, DynamicFee}` deterministically via a precedence waterfall:
-     1. Active `AntiSnipe` window takes highest priority (`max(antiSnipeFee, baseFee)`).
-     2. Otherwise, `MarketHoursFee` applies if enabled.
-     3. Otherwise, `ManagedFee` applies if enabled.
-     4. Otherwise, `DynamicFee` applies if enabled.
-2. **Multiple Return-Delta Blocks Enabled Simultaneously (`Group 4` + `ArbRecapture` + `KingOfThePool` + `ReferralSplit` + `AutoBuyback`)**:
-   - [`AfterSwapDeltaAggregator.executeAndSettleAfterSwap`](../src/base/AfterSwapDeltaAggregator.sol#L94-L234) evaluates all enabled return-delta blocks in a single pass, enforces `validateAggregateReturnDeltaBps <= 2,500 bps (25%)` at registration time, and performs **one aggregated settlement** (`1 burn + 1 donate + 1 ERC-6909 mint`) so blocks never fight over `PoolManager` deltas.
-3. **Verification in `test/presets/PresetsAndSecurityVectors.t.sol`**:
-   - `test_CustomStack_All22BlocksSimultaneously_KitchenSink()`: Enables all 22 blocks (`bitmap = (1 << 22) - 1 = 0x3FFFFF`) simultaneously on a single pool and executes buys, sells, limit orders, TWAMM orders, oracle checkpoints, and ERC-6909 claim withdrawals.
-   - `test_CustomStack_MultiFeeBlockPrecedenceWaterfall()`: Enables all 4 fee blocks simultaneously and verifies the priority transition across blocks.
-   - `testFuzz_ArbitraryBlockBitmapCombinations(uint32 rawBitmap, bool zeroForOne)`: Fuzzes random 22-bit bitmaps (`1 <= bitmap <= 0x3FFFFF`) across 1,000 runs and verifies every combination initializes, adds liquidity, and executes swaps without accounting mismatches.
+### The 7 Tier-3 Mutual-Exclusion Rules
+
+1. **Rule M1 — Single Base Fee Model (`<= 1 of 3`)**:
+   - `DynamicFee`, `ManagedFee`, and `MarketHoursFee` are mutually exclusive (`popcount <= 1`).
+   - `AntiSnipe` is only valid as a temporary launch decay overlay when paired with `DynamicFee` or `MarketHoursFee`.
+2. **Rule M2 — Non-Overlapping LP Cooldown (`<= 1 of 2`)**:
+   - `MEVProtection` (which already includes LP hold cooldown) and `JITGuard` are mutually exclusive.
+3. **Rule M3 — Non-Contradictory Dislocation Strategy (`<= 1 of 3`)**:
+   - `ArbRecapture` (taxes large tick movements for LPs), `MEVProtection` (reverts large single-swap tick movements), and `CircuitBreaker` (reverts rolling-window tick deviations) are mutually exclusive (`7` total valid states across `{MEVProtection, JITGuard, ArbRecapture, CircuitBreaker}`).
+4. **Rule M4 — Single Holder / Dump Cap (`<= 1 of 2`)**:
+   - `WalletCap` and `VestingSellCap` are mutually exclusive (`3` states: `None`, `WalletCap`, `VestingSellCap`).
+5. **Rule M5 — Single Token Sink / Jackpot / Affiliate Mechanism (`<= 1 of 4`)**:
+   - `AutoBurn`, `KingOfThePool`, `ReferralSplit`, and `AutoBuyback` are mutually exclusive (`5` states).
+6. **Rule M6 — Revenue & LP/Trader Yield Coherence (`21` combined states with M5)**:
+   - `SwapRewards` is mutually exclusive with `BuySellTax` and `FeeSharing`; `KingOfThePool` does not pair with `BuySellTax` (preventing double buy-taxation); any active Sink or Revenue block requires `LPRewards`.
+7. **Rule M7 — Pool Archetype Separation (`2,645` Retail + `198` Institutional/Pro = `2,843` Total)**:
+   - **Archetype A (`2,645` combinations)**: Retail Tokenomics / Launchpad pools (`AccessControl = 0, LimitOrders = 0, TWAMM = 0, Oracle = 0`).
+   - **Archetype B (`198` combinations)**: Institutional & Pro-Trading pools (`{AccessControl, LimitOrders, TWAMM, Oracle}` active; all 11 Retail Tokenomics bits = `0`; `AccessControl` mutually exclusive with `LimitOrders`/`TWAMM`).
+
+---
+
+## Hoodi Network Integration Test Findings (Documented Only — Tracked in `docs/07-roadmap-and-todo.md`)
+
+During end-to-end integration testing and exhaustive `2,843`-combination testing on the **Ethereum Hoodi Testnet** (`chainId = 560048`, [`test/integration/HoodiForkIntegration.t.sol`](../test/integration/HoodiForkIntegration.t.sol) and [`script/HoodiIntegration.s.sol`](../script/HoodiIntegration.s.sol)), six post-review enhancements (`IT-01`–`IT-06`) were identified and documented in [`docs/07-roadmap-and-todo.md`](./07-roadmap-and-todo.md) without modifying `src/`:
+
+### IT-01: `PresetId != PresetId.Blank` Overwrites Rather Than Unions `enabledBlocksBitmap`
+- **Location**: [`HookRigOrchestrator._configurePoolStackInternal`](../src/HookRigOrchestrator.sol#L108-L110)
+- **Current Behavior**:
+  If an integrator sets `config.presetId = PresetId.FairLaunch` *and* also sets extra expansion bits in `config.enabledBlocksBitmap`, `_configurePoolStackInternal` ignores `enabledBlocksBitmap` and strictly uses `getPresetBitmap(config.presetId)`. To enable a preset's blocks plus extra expansion blocks today, the caller must pass `config.presetId = PresetId.Blank` with the combined bitmap in `config.enabledBlocksBitmap`.
+- **Recommended Fix (`TODO-02`)**:
+  Compute `uint32 bitmap = HookPermissionMasks.getPresetBitmap(config.presetId) | config.enabledBlocksBitmap;` and validate it against the Tier 3 Mutual-Exclusion Matrix.
+
+### IT-02: Bonding Curve `maxWalletBpsDuringCurve` vs. Post-Graduation `WalletCapParams.maxWalletBps`
+- **Location**: [`LaunchpadFactory.sol`](../src/launchpad/LaunchpadFactory.sol) & [`WalletCapBlock.sol`](../src/blocks/token-rules/WalletCapBlock.sol)
+- **Current Behavior**:
+  If a token creator sets `maxWalletBpsDuringCurve = 5000` (`50%`) on the bonding curve, but sets `walletCap.maxWalletBps = 500` (`5%`) on the Uniswap v4 pool, any bonding-curve buyer who accumulated `> 5%` during the curve phase will revert with `WalletCapExceeded` if they try to **buy more** on the Uniswap v4 pool after graduation (though they can always **sell** freely).
+- **Recommended Fix (`TODO-03`)**:
+  In `LaunchpadFactory`, validate `walletCap.maxWalletBps >= curveCfg.maxWalletBpsDuringCurve` when `BIT_WALLET_CAP` is enabled.
+
+### IT-03: Enforce the Tier 3 Mutual-Exclusion Matrix (`2,843` Valid Combinations) On-Chain
+- **Location**: [`HookPermissionMasks.sol`](../src/libraries/HookPermissionMasks.sol) & [`HookRigOrchestrator._configurePoolStackInternal`](../src/HookRigOrchestrator.sol#L108-L122)
+- **Recommended Fix (`TODO-01`)**:
+  Add `HookPermissionMasks.isValidTier3Bitmap(uint32 bitmap)` and revert with `InvalidBlockBitmap(uint32 bitmap)` during `registerPoolStack` / `launchToken` if a custom bitmap violates any of the 7 Tier-3 Mutual-Exclusion rules (`M1`–`M7`).
+
+### IT-04: `withdrawClaim(..., amount = 0, ...)` Reverts Instead of Claiming Full Available Balance
+- **Location**: [`HookRigBase.sol`](../src/base/HookRigBase.sol#L73-L86)
+- **Current Behavior**:
+  Calling `withdrawClaim(poolId, currency, 0, recipient)` reverts with `InsufficientClaimBalance(available, 0)` instead of defaulting `amount == 0` to the caller's full available ERC-6909 claim balance.
+- **Recommended Fix (`TODO-04`)**:
+  Set `uint256 withdrawn = amount == 0 ? available : amount;` in `withdrawClaim`.
+
+### IT-05: Directional Buy vs. Sell Return-Delta Budget Validation
+- **Location**: [`AfterSwapDeltaAggregator._validateAggregateReturnDeltaBudget`](../src/base/AfterSwapDeltaAggregator.sol#L45-L74)
+- **Current Behavior**:
+  `_validateAggregateReturnDeltaBudget` sums `max(buyTaxBps, sellTaxBps)` together with buy-only blocks (`AutoBurn`, `LPRewards`, `KingOfThePool`) into a single scalar, which can reject valid stacks where `sellTaxBps` is high (`15%`) and buy-only blocks total `12%`, even though neither a buy (`12%`) nor a sell (`15%`) exceeds `MAX_AGGREGATE_AFTER_SWAP_BPS = 2500` (`25%`).
+- **Recommended Fix (`TODO-05`)**:
+  Track `maxBuyBps` and `maxSellBps` independently and return `max(maxBuyBps, maxSellBps)`.
+
+### IT-06: Post-Cut Net Volume Attribution in `SwapRewards`
+- **Location**: [`HookRigOrchestrator._runAfterSwapPipeline`](../src/HookRigOrchestrator.sol#L403-L405)
+- **Current Behavior**:
+  `_accrueSwapRewards` credits volume points using `ctx.grossUnspecifiedAmount` rather than subtracting `totalCutAmount` withheld by `afterSwapReturnDelta` blocks.
+- **Recommended Fix (`TODO-06`)**:
+  Pass `ctx.grossUnspecifiedAmount > totalCutAmount ? ctx.grossUnspecifiedAmount - totalCutAmount : 0` to `_accrueSwapRewards`.
+
+
 

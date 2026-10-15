@@ -1,0 +1,48 @@
+[
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 0,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x2cdbf4850197c0d153dc98158b600bcd982bf298c2167173d14e490656f27c36b7781007",
+   "dataAbiValues": {
+    "methodSignature": "virtualXYKLaunch_buy_toGraduation(uint256)",
+    "inputValues": [
+     "720437534123906993833552751418101426666073462552529750548716363001517051911"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 1,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x4fb9bafe",
+   "dataAbiValues": {
+    "methodSignature": "property_GL26_noStrandedCurveValue()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ }
+]

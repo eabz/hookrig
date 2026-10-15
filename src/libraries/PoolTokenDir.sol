@@ -17,6 +17,7 @@ library PoolTokenDir {
         Currency quoteCurrency;
         Currency specifiedCurrency;
         Currency unspecifiedCurrency;
+        uint256 settledSpecifiedAmount; // Actual settled magnitude on specified leg
         uint256 grossUnspecifiedAmount; // Magnitude of unspecified delta from swap
         address trader;
         int24 preSwapTick;
@@ -42,12 +43,15 @@ library PoolTokenDir {
         ctx.specifiedCurrency = specifiedIsToken0 ? key.currency0 : key.currency1;
         ctx.unspecifiedCurrency = specifiedIsToken0 ? key.currency1 : key.currency0;
 
+        int128 rawSpecified = specifiedIsToken0 ? swapDelta.amount0() : swapDelta.amount1();
         int128 rawUnspecified = specifiedIsToken0 ? swapDelta.amount1() : swapDelta.amount0();
         if (ctx.isExactInput) {
-            // In exact-input, unspecified is output credit to trader (> 0)
+            // In exact-input, specified is input debt (< 0) and unspecified is output credit (> 0)
+            ctx.settledSpecifiedAmount = rawSpecified < 0 ? uint256(uint128(-rawSpecified)) : 0;
             ctx.grossUnspecifiedAmount = rawUnspecified > 0 ? uint256(uint128(rawUnspecified)) : 0;
         } else {
-            // In exact-output, unspecified is input debt owed by trader (< 0)
+            // In exact-output, specified is output credit (> 0) and unspecified is input debt (< 0)
+            ctx.settledSpecifiedAmount = rawSpecified > 0 ? uint256(uint128(rawSpecified)) : 0;
             ctx.grossUnspecifiedAmount = rawUnspecified < 0 ? uint256(uint128(-rawUnspecified)) : 0;
         }
     }

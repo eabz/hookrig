@@ -191,7 +191,7 @@ abstract contract HookRigTestBase is Test {
 
         address hookAddr = address(uint160(0x4444000000000000000000000000000000000000) | ORCHESTRATOR_HOOK_FLAGS);
         deployCodeTo("HookRigOrchestrator.sol:HookRigOrchestrator", abi.encode(poolManager, owner), hookAddr);
-        orchestrator = HookRigOrchestrator(hookAddr);
+        orchestrator = HookRigOrchestrator(payable(hookAddr));
 
         uint64 nextNonce = vm.getNonce(address(this));
         address predictedFactory = vm.computeCreateAddress(address(this), nextNonce + 3);

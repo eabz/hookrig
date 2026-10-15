@@ -16,3 +16,17 @@ out/
 .env
 .env.*
 !.env.example
+
+# DS_Store
+.DS_Store
+
+# fizz: regenerable fuzzing artifacts
+fizz_data/crytic-export/
+fizz_data/logs_medusa/
+fizz_data/corpus_medusa/*
+!fizz_data/corpus_medusa/test_results/
+fizz_data/corpus_echidna/
+
+# solidity-auditor local ledger & run reports
+.solidity-auditor/
+

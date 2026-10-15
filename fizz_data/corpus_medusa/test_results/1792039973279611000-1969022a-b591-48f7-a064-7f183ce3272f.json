@@ -1,0 +1,553 @@
+[
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 0,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x3a80ef7c",
+   "dataAbiValues": {
+    "methodSignature": "property_GL11_graduationPriceContinuity()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 0,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xc66701f6",
+   "dataAbiValues": {
+    "methodSignature": "property_GL06_claimsPullOnly()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 1,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x467f44f57503f6afccd1c02f4eb3171c504d2b1bc8887a512c6772ef94040f148224f9f0073121570917363fc803f0522cc1e6f8bc35875ddfb37320af2a550373d92b2e000000000000000000000000173594b1d964233eda0defef02d244f736dece04",
+   "dataAbiValues": {
+    "methodSignature": "virtualXYKLaunch_buy_clamped(uint256,uint256,address)",
+    "inputValues": [
+     "52927606394598473765285035918374852313354605556277280477108464756718678899184",
+     "3252995550359169132711272100144909740669171943445602952668997850074638265134",
+     "0x173594b1D964233eDa0DeFeF02D244f736dece04"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 2,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xbd95850a0000000000000000000000000000000000000000000000007f80963d43a9b2fa0fffffffffffffffffffffffefffffffffffffff00000000ffffffff0eff97a50000000000000000000000000000000000003fffc000400686b975b87bd3f44f",
+   "dataAbiValues": {
+    "methodSignature": "pool_donate_clamped(uint256,uint256,uint256)",
+    "inputValues": [
+     "9187508429708178170",
+     "7237005577332262213973186562951650388496192609135576787925513718242197084069",
+     "1298054407895430184336232233038927"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000020000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 0,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xc69346ed07d529de31592a037411f58dde6bb4908a1ff3e200fa478703d045326e6edafe00000000000000000000000000000000ffff0000ffff0000ffff0000ffff0000",
+   "dataAbiValues": {
+    "methodSignature": "hookRigOrchestrator_registerReferrer_clamped(uint256,address)",
+    "inputValues": [
+     "3542817326786021382606725669528282621530966190570929304615156332384117250814",
+     "0x00000000FFfF0000ffFf0000FFFF0000Ffff0000"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 3,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x467f44f50deef6f21f302cdb2d4ba4b2255ea197f62eb570da52c0b1e09223691007b11505d65fd2c46922ec3314ef1d1cf810f33127742f30a31423d95cc2e005e3f7c70000000000000000000000000000000000000000000000000000000000000030",
+   "dataAbiValues": {
+    "methodSignature": "virtualXYKLaunch_buy_clamped(uint256,uint256,address)",
+    "inputValues": [
+     "6302280990192621625923574834722173232134602757940655849955955463279027400981",
+     "2640330862955111173800535700152292322182185232018966038454742899377718949831",
+     "0x0000000000000000000000000000000000000030"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 4,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x76cf09d8",
+   "dataAbiValues": {
+    "methodSignature": "property_GL25_reasonableBuyNonZero()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 1,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xcdad04170652f10c50698b0e2ae6351977336090b114dc023e3a718e64550e3f677001767fffffffffffffffffffffffc77b47b0982b72c04ec8062dc58426936f611d88",
+   "dataAbiValues": {
+    "methodSignature": "steppedTrancheLaunch_buySellRoundTrip(uint256,uint256)",
+    "inputValues": [
+     "2860422203668763658379944051604969504013861626539194963118011259586698281334",
+     "57896044618658097711785492504021290689421718731203191066299747846455948287368"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 2,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x35bc6e1e03614f46891b3d385e51716a4c4617eeffcf80abb9cf4b4b378e131ccaf7d95e",
+   "dataAbiValues": {
+    "methodSignature": "hookRigOrchestrator_finalizeExpiredKingRound_clamped(uint256)",
+    "inputValues": [
+     "1528869850629955091578868994818962268120655662855576923115521509438925560158"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 3,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xd19242ec",
+   "dataAbiValues": {
+    "methodSignature": "property_GL04_limitOrderEscrow()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 4,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xce22b53d0706501cdf04b5df9190d962f9bfb61f21806843e7978749848ac362471936960000000000000000000000000000000000000000000000000000000000000000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff83ef10000000000000000000000000000000000000000000000000000000000000001",
+   "dataAbiValues": {
+    "methodSignature": "fizz_probeAccumulatorGrief(uint256,bool,int24,bool)",
+    "inputValues": [
+     "3177343940544363755706213094297317288365857739870870192907340096997846234774",
+     false,
+     "-508175",
+     true
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 17116,
+  "blockTimestampDelay": 88051
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 5,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xc66701f6",
+   "dataAbiValues": {
+    "methodSignature": "property_GL06_claimsPullOnly()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 5,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x76cf09d8",
+   "dataAbiValues": {
+    "methodSignature": "property_GL25_reasonableBuyNonZero()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 6,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x932182c3105d0eced3016eb62a91caea6f176bf17349dc5bbdca23e4973b138655eb2324",
+   "dataAbiValues": {
+    "methodSignature": "setCurrentActor(uint256)",
+    "inputValues": [
+     "7401424554776003282415337206775964202251089212574129133911586879671588561700"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000020000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 1,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x7b06472d696e6bf7378657befc16a2960d6336a9d0629d5ab529e85b50d6419ad0eb80520000000000000000000000000000000000000000000000000000000000000dac",
+   "dataAbiValues": {
+    "methodSignature": "hookRigOrchestrator_registerReferrer(bytes32,address)",
+    "inputValues": [
+     "696e6bf7378657befc16a2960d6336a9d0629d5ab529e85b50d6419ad0eb8052",
+     "0x0000000000000000000000000000000000000dac"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 7,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xe72b0c8b0ffffffffffffffffffffffffffffffffffffffffffff8da68a95729e667f9227fffffffffffffffffffffffffffffffffffffffffffffea50e2874a73412631029dacd37dfe7f9f2a326bae5fa9800ef63c19e7f8f6be5d6797e635221674c1",
+   "dataAbiValues": {
+    "methodSignature": "hookRigOrchestrator_withdrawClaim_full(uint256,uint256,uint256)",
+    "inputValues": [
+     "7237005577332262213973186563042994240829374041602535218716099000494570600738",
+     "57896044618658097711785492504343953926634992332820282019328792003956556506673",
+     "1183213488525864940432669560236688763035615091800572887535154324052469249217"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 6,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x932182c3051366157ca63cb80ed12300448b861da2210cc44f5f5f152020e80f9292cc40",
+   "dataAbiValues": {
+    "methodSignature": "setCurrentActor(uint256)",
+    "inputValues": [
+     "2295838894560484069461063858029893074933703363043572917874834219066440469568"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 8,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x3642e9cf",
+   "dataAbiValues": {
+    "methodSignature": "property_GL24_autoBurnLedger()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000020000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 2,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x0c09aacb0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff50699be1fa8086578cadc74a8966c17c8cdb56b30c1140e9458bdac35eae92d480000000000000000000000000000000000000000000000000000000000000000",
+   "dataAbiValues": {
+    "methodSignature": "virtualXYKLaunch_dustCycle(uint256,uint256,uint8)",
+    "inputValues": [
+     "7237005577332262213973186563042994240829374041602535252466099000494570602485",
+     "2985516877670847089856704947709264873483796335978696145774561840447168785736",
+     "0"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 7,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x6b43283a3fffffffffffffffffffffffc77b47b0982b72bfcec80633b14b84c0520e55f5",
+   "dataAbiValues": {
+    "methodSignature": "hookRigOrchestrator_cancelLimitOrder_clamped(uint256)",
+    "inputValues": [
+     "28948022309329048855892746251849313726104222564753435975287443047715594720757"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 9,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x53e9e8e300000000000000000000000000000000000000000000000000016345785d8a000000000000000000000000000000000000000000000000000000000000000000",
+   "dataAbiValues": {
+    "methodSignature": "pool_swap_honestSell(uint256,uint256)",
+    "inputValues": [
+     "390625000000000",
+     "0"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 10,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xd030c134",
+   "dataAbiValues": {
+    "methodSignature": "property_GL03_kingPotCurrencyPurity()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 11,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x9353de61",
+   "dataAbiValues": {
+    "methodSignature": "property_GL19_oracleBounds()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ }
+]

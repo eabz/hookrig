@@ -18,10 +18,19 @@ interface IHookRigOrchestrator is IHookRigBlock {
 
     error UnauthorizedPoolInitializer(address caller);
     error PoolAlreadyConfigured(PoolId poolId);
+    error PoolNotConfigured(PoolId poolId);
+    error PoolAlreadyInitialized(PoolId poolId);
+    error PoolAlreadyGraduated(PoolId poolId);
     error InvalidBlockBitmap(uint32 bitmap);
     error AggregateReturnDeltaBpsExceeded(uint256 totalBps, uint256 maxAllowedBps);
     error DynamicFeeFlagRequired();
     error InsufficientClaimBalance(uint256 requested, uint256 available);
+
+    function PROTOCOL_ROYALTY_BPS() external view returns (uint16);
+
+    function PROTOCOL_ROYALTY_RECIPIENT() external view returns (address);
+
+    function isValidTier3Bitmap(uint32 bitmap) external pure returns (bool);
 
     function registerPoolStack(PoolKey calldata key, PoolStackConfig calldata config) external;
 
@@ -30,6 +39,8 @@ interface IHookRigOrchestrator is IHookRigBlock {
     function seedKingPotFromLaunchCurve(PoolId poolId, Currency currency, uint256 amount) external;
 
     function withdrawClaim(PoolId poolId, Currency currency, uint256 amount, address to) external;
+
+    function setBuySellTax(PoolId poolId, uint16 buyTaxBps, uint16 sellTaxBps, address taxRecipient) external;
 
     function getPoolEnabledBlocks(PoolId poolId) external view returns (uint32);
 

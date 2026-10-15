@@ -45,11 +45,14 @@ library HookPermissionMasks {
     uint32 internal constant BIT_AUTO_BUYBACK = 1 << 21;
 
     // Category Masks
-    uint32 internal constant FEE_BLOCKS_MASK = BIT_DYNAMIC_FEE | BIT_MANAGED_FEE | BIT_MARKET_HOURS_FEE
-        | BIT_ANTI_SNIPE;
+    uint32 internal constant BASE_FEE_ENGINES_MASK = BIT_DYNAMIC_FEE | BIT_MANAGED_FEE | BIT_MARKET_HOURS_FEE;
+
+    uint32 internal constant FEE_BLOCKS_MASK = BASE_FEE_ENGINES_MASK | BIT_ANTI_SNIPE;
 
     uint32 internal constant AFTER_SWAP_RETURN_DELTA_BLOCKS_MASK = BIT_ARB_RECAPTURE | BIT_BUY_SELL_TAX | BIT_AUTO_BURN
         | BIT_FEE_SHARING | BIT_LP_REWARDS | BIT_KING_OF_THE_POOL | BIT_REFERRAL_SPLIT | BIT_AUTO_BUYBACK;
+
+    uint32 internal constant ALL_BLOCKS_MASK = (uint32(1) << 22) - 1;
 
     // -------------------------------------------------------------------------
     // The 12 Curated Preset Block Bitmaps (matching docs/01-explanation-and-catalog.md)
@@ -114,6 +117,57 @@ library HookPermissionMasks {
         return 0;
     }
 
+    /// @notice Validates Tier 3 block compatibility rules (mutual exclusions and incompatible combinations).
+    function isValidTier3Bitmap(uint32 bitmap) internal pure returns (bool) {
+        if (bitmap == 0 || (bitmap & ~ALL_BLOCKS_MASK) != 0) {
+            return false;
+        }
+        // 1. At most one base fee engine (`DynamicFee`, `ManagedFee`, `MarketHoursFee`) may be active
+        uint32 baseFeeBits = bitmap & BASE_FEE_ENGINES_MASK;
+        if (baseFeeBits != 0 && (baseFeeBits & (baseFeeBits - 1)) != 0) {
+            return false;
+        }
+        // 2. Dislocation & JIT protection mutual exclusions
+        bool hasMev = (bitmap & BIT_MEV_PROTECTION) != 0;
+        bool hasJit = (bitmap & BIT_JIT_GUARD) != 0;
+        bool hasArb = (bitmap & BIT_ARB_RECAPTURE) != 0;
+        bool hasCb = (bitmap & BIT_CIRCUIT_BREAKER) != 0;
+        if (hasMev && (hasJit || hasArb || hasCb)) {
+            return false;
+        }
+        if (hasArb && hasCb) {
+            return false;
+        }
+        // 3. `WalletCap` and `VestingSellCap` are mutually exclusive
+        if ((bitmap & BIT_WALLET_CAP) != 0 && (bitmap & BIT_VESTING_SELL_CAP) != 0) {
+            return false;
+        }
+        // 4. `LimitOrders` cannot be combined with `BuySellTax`, `AutoBurn`, `WalletCap`, or `VestingSellCap`
+        if (
+            (bitmap & BIT_LIMIT_ORDERS) != 0
+                && (bitmap & (BIT_BUY_SELL_TAX | BIT_AUTO_BURN | BIT_WALLET_CAP | BIT_VESTING_SELL_CAP)) != 0
+        ) {
+            return false;
+        }
+        // 5. `TWAMM` cannot be combined with `AntiSnipe`, `WalletCap`, `VestingSellCap`, `BuySellTax`, or `AutoBurn`
+        if (
+            (bitmap & BIT_TWAMM) != 0
+                && (bitmap
+                        & (BIT_ANTI_SNIPE | BIT_WALLET_CAP | BIT_VESTING_SELL_CAP | BIT_BUY_SELL_TAX | BIT_AUTO_BURN))
+                    != 0
+        ) {
+            return false;
+        }
+        // 6. `AccessControl` cannot be combined with `LimitOrders`, `TWAMM`, `AntiSnipe`, or `KingOfThePool`
+        if (
+            (bitmap & BIT_ACCESS_CONTROL) != 0
+                && (bitmap & (BIT_LIMIT_ORDERS | BIT_TWAMM | BIT_ANTI_SNIPE | BIT_KING_OF_THE_POOL)) != 0
+        ) {
+            return false;
+        }
+        return true;
+    }
+
     /// @notice Computes the required Uniswap v4 Hooks.Permissions for any given block bitmap.
     function permissionsForBitmap(uint32 bitmap) internal pure returns (Hooks.Permissions memory perms) {
         perms.beforeInitialize = (bitmap & BIT_TWAMM) != 0;
@@ -121,9 +175,9 @@ library HookPermissionMasks {
             (bitmap
                         & (BIT_DYNAMIC_FEE
                             | BIT_MANAGED_FEE
-                            | BIT_MARKET_HOURS_FEE
-                            | BIT_ANTI_SNIPE
+                            | BIT_ARB_RECAPTURE
                             | BIT_LIMIT_ORDERS
+                            | BIT_TWAMM
                             | BIT_ORACLE)) != 0;
         perms.beforeAddLiquidity =
             (bitmap & (BIT_TWAMM | BIT_ACCESS_CONTROL | BIT_ORACLE | BIT_MEV_PROTECTION | BIT_JIT_GUARD)) != 0;
@@ -136,16 +190,15 @@ library HookPermissionMasks {
                             | BIT_MEV_PROTECTION
                             | BIT_ARB_RECAPTURE
                             | BIT_ACCESS_CONTROL
-                            | BIT_WALLET_CAP
                             | BIT_TWAMM
                             | BIT_ORACLE
-                            | BIT_CIRCUIT_BREAKER
-                            | BIT_VESTING_SELL_CAP)) != 0;
+                            | BIT_CIRCUIT_BREAKER)) != 0;
         perms.afterSwap =
             (bitmap
                         & (AFTER_SWAP_RETURN_DELTA_BLOCKS_MASK
                             | BIT_MEV_PROTECTION
                             | BIT_WALLET_CAP
+                            | BIT_VESTING_SELL_CAP
                             | BIT_SWAP_REWARDS
                             | BIT_LIMIT_ORDERS
                             | BIT_CIRCUIT_BREAKER)) != 0;

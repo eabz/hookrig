@@ -18,7 +18,10 @@ library FeeSharingLogic {
         if (params.feeShareBps > MAX_FEE_SHARE_BPS || params.secondaryShareBps > 10_000) {
             revert InvalidFeeSharingConfig();
         }
-        if (params.feeShareBps > 0 && params.primaryRecipient == address(0)) {
+        if (
+            (params.feeShareBps > 0 && params.primaryRecipient == address(0))
+                || (params.secondaryShareBps > 0 && params.secondaryRecipient == address(0))
+        ) {
             revert InvalidFeeSharingConfig();
         }
         configs[poolId] = params;

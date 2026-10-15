@@ -18,6 +18,7 @@ library DynamicFeeLogic {
     }
 
     error InvalidDynamicFeeBounds(uint24 baseFee, uint24 maxFee);
+    error InvalidVolatilityTickThreshold(int24 threshold);
 
     function stage(
         mapping(PoolId => DynamicFeeState) storage states,
@@ -26,6 +27,9 @@ library DynamicFeeLogic {
     ) external {
         if (params.baseFee > params.maxFee || params.maxFee > MAX_DYNAMIC_FEE) {
             revert InvalidDynamicFeeBounds(params.baseFee, params.maxFee);
+        }
+        if (params.volatilityTickThreshold < 0 || params.volatilityTickThreshold > 1000) {
+            revert InvalidVolatilityTickThreshold(params.volatilityTickThreshold);
         }
         DynamicFeeState storage st = states[poolId];
         st.baseFee = params.baseFee;
@@ -40,17 +44,17 @@ library DynamicFeeLogic {
         DynamicFeeState storage state = states[poolId];
         if (state.maxFee == 0) return 0;
 
-        int24 tickDelta = currentTick >= state.lastObservedTick
-            ? currentTick - state.lastObservedTick
-            : state.lastObservedTick - currentTick;
+        int256 tickDelta = currentTick >= state.lastObservedTick
+            ? int256(currentTick) - int256(state.lastObservedTick)
+            : int256(state.lastObservedTick) - int256(currentTick);
 
-        uint24 absDelta = uint24(tickDelta > 1000 ? int24(1000) : tickDelta);
+        uint24 absDelta = uint24(uint256(tickDelta > 1000 ? int256(1000) : tickDelta));
         if (block.number > state.lastUpdateBlock) {
             state.rollingVolatilityTicks = (state.rollingVolatilityTicks * 3 + absDelta) / 4;
             state.lastObservedTick = currentTick;
             state.lastUpdateBlock = uint32(block.number);
         } else if (absDelta > state.rollingVolatilityTicks) {
-            state.rollingVolatilityTicks = absDelta;
+            state.rollingVolatilityTicks = (state.rollingVolatilityTicks * 3 + absDelta) / 4;
         }
 
         uint24 threshold = uint24(state.volatilityTickThreshold);

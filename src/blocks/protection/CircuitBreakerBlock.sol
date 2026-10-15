@@ -13,6 +13,7 @@ library CircuitBreakerLogic {
     }
 
     error CircuitBreakerTriggered(PoolId poolId, int24 anchorTick, int24 postSwapTick, int24 maxDeviation);
+    error InvalidCircuitBreakerConfig(int24 maxWindowTickDeviation, uint32 windowSeconds);
 
     function checkAndAdvance(
         mapping(PoolId => CircuitBreakerState) storage states,
@@ -23,13 +24,18 @@ library CircuitBreakerLogic {
         CircuitBreakerState storage cb = states[poolId];
         if (cb.maxWindowTickDeviation <= 0) return;
 
-        if (cb.windowStartTimestamp == 0 || block.timestamp >= cb.windowStartTimestamp + cb.windowSeconds) {
+        if (cb.windowStartTimestamp == 0) {
             cb.anchorTick = preSwapTick;
+            cb.windowStartTimestamp = uint32(block.timestamp);
+        } else if (block.timestamp >= uint256(cb.windowStartTimestamp) + uint256(cb.windowSeconds)) {
+            cb.anchorTick = postSwapTick;
             cb.windowStartTimestamp = uint32(block.timestamp);
         }
 
-        int24 dev = postSwapTick >= cb.anchorTick ? postSwapTick - cb.anchorTick : cb.anchorTick - postSwapTick;
-        if (dev > cb.maxWindowTickDeviation) {
+        int256 dev = postSwapTick >= cb.anchorTick
+            ? int256(postSwapTick) - int256(cb.anchorTick)
+            : int256(cb.anchorTick) - int256(postSwapTick);
+        if (dev > int256(cb.maxWindowTickDeviation)) {
             revert CircuitBreakerTriggered(poolId, cb.anchorTick, postSwapTick, cb.maxWindowTickDeviation);
         }
     }
@@ -44,8 +50,16 @@ abstract contract CircuitBreakerBlock is IHookRigBlock {
     uint32 internal constant MAX_WINDOW_SECONDS = 86_400; // Max 24h rolling window so pools auto-recover
 
     function _initCircuitBreaker(PoolId poolId, CircuitBreakerParams calldata params) internal {
+        if (
+            params.maxWindowTickDeviation < 0
+                || (params.maxWindowTickDeviation > 0 && params.maxWindowTickDeviation < 10)
+                || params.maxWindowTickDeviation > 887_272
+                || params.windowSeconds > MAX_WINDOW_SECONDS
+                || (params.windowSeconds > 0 && params.windowSeconds < 10)
+        ) {
+            revert CircuitBreakerLogic.InvalidCircuitBreakerConfig(params.maxWindowTickDeviation, params.windowSeconds);
+        }
         uint32 win = params.windowSeconds > 0 ? params.windowSeconds : 300;
-        if (win > MAX_WINDOW_SECONDS) win = MAX_WINDOW_SECONDS;
         _circuitBreakers[poolId] = CircuitBreakerLogic.CircuitBreakerState({
             maxWindowTickDeviation: params.maxWindowTickDeviation,
             windowSeconds: win,

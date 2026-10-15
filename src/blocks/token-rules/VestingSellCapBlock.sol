@@ -48,7 +48,7 @@ library VestingSellCapLogic {
         WalletSellEpoch storage ep = epochs[poolId][seller];
 
         if (ep.epochIndex != currentEpoch || ep.startOfEpochBalance == 0) {
-            uint256 currentBal = IERC20(Currency.unwrap(projectCurrency)).balanceOf(seller) + tokensSold;
+            uint256 currentBal = IERC20(Currency.unwrap(projectCurrency)).balanceOf(seller);
             ep.epochIndex = currentEpoch;
             ep.startOfEpochBalance = uint128(currentBal > type(uint128).max ? type(uint128).max : currentBal);
             ep.soldInEpoch = 0;

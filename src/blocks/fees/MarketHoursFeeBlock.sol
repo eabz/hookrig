@@ -17,6 +17,7 @@ library MarketHoursFeeLogic {
         if (
             params.openHourUtc >= 24 || params.closeHourUtc >= 24 || params.openFee > MAX_MARKET_HOURS_FEE
                 || params.closedFee > MAX_MARKET_HOURS_FEE
+                || (params.openHourUtc == params.closeHourUtc && params.openFee != params.closedFee)
         ) {
             revert InvalidMarketHoursConfig();
         }

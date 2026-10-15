@@ -39,11 +39,18 @@ abstract contract HookRigBase is
         bool launchpadGraduated;
         address authorizedCurve;
         address poolAdmin;
+        Currency projectCurrency;
     }
 
     address public launchpadFactory;
     mapping(address router => bool trusted) public isTrustedRouter;
     mapping(PoolId poolId => PoolRuntimeMeta meta) internal _poolMeta;
+
+    /// @notice Publicly announced 5 bps (0.05%) protocol royalty on return-delta swaps.
+    uint16 public constant override PROTOCOL_ROYALTY_BPS = 5;
+
+    /// @notice Publicly exposed static protocol royalty recipient address defined at build time (no admin key).
+    address public constant override PROTOCOL_ROYALTY_RECIPIENT = 0xEB1492572984f5353a3089a49C01420F171370C2;
 
     /// @notice Strictly isolated per-PoolId ERC-6909 claim ledger: poolId => currency => beneficiary => amount
     mapping(PoolId poolId => mapping(Currency currency => mapping(address beneficiary => uint256 amount))) public
@@ -51,8 +58,11 @@ abstract contract HookRigBase is
 
     error OnlyLaunchpadFactory(address caller);
     error OnlyAuthorizedCurve(address caller);
+    error OnlyPoolAdmin(address caller);
 
     constructor(IPoolManager _poolManager, address _initialOwner) BaseHook(_poolManager) Ownable(_initialOwner) {}
+
+    receive() external payable {}
 
     function setLaunchpadFactory(address _factory) external onlyOwner {
         launchpadFactory = _factory;
@@ -63,16 +73,16 @@ abstract contract HookRigBase is
         emit TrustedRouterUpdated(router, trusted);
     }
 
-    /// @notice Resolves the true end-user initiator address safely (preventing the `msg.sender` vs `sender` trap).
+    /// @notice Resolves the true end-user initiator address safely (preventing untrusted router hookData spoofing).
     function _resolveUser(address routerSender, bytes calldata hookData) internal view returns (address user) {
         if (isTrustedRouter[routerSender]) {
             try IMsgSender(routerSender).msgSender() returns (address resolved) {
                 if (resolved != address(0)) return resolved;
             } catch {}
-        }
-        if (hookData.length >= 32) {
-            user = abi.decode(hookData[:32], (address));
-            if (user != address(0)) return user;
+            if (hookData.length >= 32) {
+                user = abi.decode(hookData[:32], (address));
+                if (user != address(0)) return user;
+            }
         }
         return routerSender;
     }
@@ -86,20 +96,23 @@ abstract contract HookRigBase is
     }
 
     /// @notice Pull-based claim withdrawal so blacklisted or reverting tokens never brick swaps.
+    ///         Passing `amount == 0` withdraws the caller's full available balance.
     function withdrawClaim(PoolId poolId, Currency currency, uint256 amount, address to)
         external
         override
         nonReentrant
     {
         uint256 available = poolClaims[poolId][currency][msg.sender];
-        if (amount == 0 || amount > available) {
-            revert InsufficientClaimBalance(amount, available);
+        uint256 withdrawAmount = amount == 0 ? available : amount;
+        if (withdrawAmount == 0 || withdrawAmount > available) {
+            revert InsufficientClaimBalance(withdrawAmount, available);
         }
-        poolClaims[poolId][currency][msg.sender] = available - amount;
+        poolClaims[poolId][currency][msg.sender] = available - withdrawAmount;
 
-        _payoutERC6909Claim(currency, to, amount);
+        address recipient = to == address(0) ? msg.sender : to;
+        _payoutERC6909Claim(currency, recipient, withdrawAmount);
 
-        emit ClaimWithdrawn(poolId, currency, msg.sender, amount);
+        emit ClaimWithdrawn(poolId, currency, msg.sender, withdrawAmount);
     }
 
     /// @notice Unlocks PoolManager to burn ERC-6909 claims held by this hook and transfer underlying currency to `to`.

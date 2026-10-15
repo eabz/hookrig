@@ -1,0 +1,54 @@
+[
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x9b45df28460a3ee466faa854e84e3da53a333984",
+   "nonce": 0,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x932182c3000387e2e96093ab71b687c452e3e001ff97fbaf4af2d5b9d8e75f2daee93aa4",
+   "dataAbiValues": {
+    "methodSignature": "setCurrentActor(uint256)",
+    "inputValues": [
+     "6238394476592019359318318695583456181485619203980254193250552064961493668"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000010000",
+   "to": "0x9b45df28460a3ee466faa854e84e3da53a333984",
+   "nonce": 1,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x0fd643abfffffffffffffffffffffffffefffffe2f752732a37a743e4b29c0c86755ac9f000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000f03a2d3ed8b11cc0f85952ea1191b1ef2b59f1e0890bb212bd8a7d419c7f00000000000000000000000000000000000000000000000000000000000000c2",
+   "dataAbiValues": {
+    "methodSignature": "pool_swap_dust(uint256,bool,bool,uint256,uint8)",
+    "inputValues": [
+     "115792089237316195423570985008682198861881678101834770352134915674431894695071",
+     true,
+     true,
+     "1657987565043086139252499656809673818649835059465411502087177941230394495",
+     "194"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ }
+]

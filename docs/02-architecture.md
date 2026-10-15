@@ -131,6 +131,14 @@ Blocks like `MEV protection`, `Arb recapture`, and `Wallet cap` need to compare 
 - In `beforeSwap`, the orchestrator records pre-swap `sqrtPriceX96`, `tick`, and `block.number` into a `PoolId`-namespaced transient storage slot (`TransientSlot`).
 - In `afterSwap`, blocks read this transient snapshot to compute exact tick traversal, arbitrage spread, and output amounts, and then **explicitly zero the transient slot** before returning so multi-hop or batched swaps inside the same `unlock()` transaction never read stale transient data.
 
+### 4.4 Tier 3 Block Compatibility & Mutual-Exclusion Architecture (`2,843` Valid Stacks)
+To guarantee that custom block stacks never suffer from silent fee overrides, duplicate cooldowns, or contradictory price-dislocation rules, HookRig defines a **Tier 3 Mutual-Exclusion Matrix** across the 22 blocks:
+1. **Mutex M1 — Base LP Fee (`<= 1 of 3`)**: `DynamicFee`, `ManagedFee`, and `MarketHoursFee` are mutually exclusive; `AntiSnipe` is only valid as a decay overlay on `DynamicFee` or `MarketHoursFee`.
+2. **Mutex M2 & M3 — Dislocation & JIT Guard (`7` valid states)**: `ArbRecapture`, `MEVProtection`, and `CircuitBreaker` are mutually exclusive (`<= 1 of 3`), and `MEVProtection` cannot combine with `JITGuard` (`<= 1 of 2`).
+3. **Mutex M4 — Holder / Dump Cap (`<= 1 of 2`)**: `WalletCap` and `VestingSellCap` are mutually exclusive.
+4. **Mutex M5 & M6 — Sink, Revenue & LP/Trader Yield (`21` valid states)**: `AutoBurn`, `KingOfThePool`, `ReferralSplit`, and `AutoBuyback` are mutually exclusive (`<= 1 of 4`); `SwapRewards` cannot combine with `BuySellTax` or `FeeSharing`; any active Sink or Revenue block requires `LPRewards`.
+5. **Mutex M7 — Archetype Separation**: Retail Tokenomics/Launchpad blocks (`AntiSnipe`, `WalletCap`, `VestingSellCap`, `BuySellTax`, `AutoBurn`, `FeeSharing`, `LPRewards`, `SwapRewards`, `KingOfThePool`, `ReferralSplit`, `AutoBuyback`) and Institutional/Pro-Trading blocks (`AccessControl`, `LimitOrders`, `TWAMM`, `Oracle`) belong to disjoint pool archetypes (`2,645` Retail combinations + `198` Institutional/Pro combinations = **`2,843` total valid stacks**, including all 12 curated Presets).
+
 ---
 
 ## 5. Dependency Stack

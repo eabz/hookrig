@@ -1,0 +1,75 @@
+[
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000020000",
+   "to": "0x9b45df28460a3ee466faa854e84e3da53a333984",
+   "nonce": 0,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xb192155200000000000000000000000000000000000000000000000000000000000000f40003fc040019a278d5ccd9273ccd282cde7f9aa41b73eb5d4ddf03aba70f0b3500000c088fe4825d2d57ffe29043a00fc15bccf19f2f867c0607f42d3a90e78d00007266a3d8dafc5cca0dbdc4005377018426dd5e15e6dfb2c7694cc9db9437000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fc",
+   "dataAbiValues": {
+    "methodSignature": "hookRigOrchestrator_secondary(uint8,uint256,uint256,uint256,uint256,address)",
+    "inputValues": [
+     "244",
+     "7039889124058529606743738339005702812879511173308590589572915455262133045",
+     "83051789395779169594548185466725499366221978168264842905848485233354637",
+     "789566253206858305665287142714140577996777875461401328588845790665610295",
+     "0",
+     "0x00000000000000000000000000000000000000fc"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000020000",
+   "to": "0x9b45df28460a3ee466faa854e84e3da53a333984",
+   "nonce": 1,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xd19242ec",
+   "dataAbiValues": {
+    "methodSignature": "property_GL04_limitOrderEscrow()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 1,
+  "blockTimestampDelay": 1
+ },
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x9b45df28460a3ee466faa854e84e3da53a333984",
+   "nonce": 0,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x0",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0x843afcf6",
+   "dataAbiValues": {
+    "methodSignature": "property_GL17_twammBounded()",
+    "inputValues": []
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 0,
+  "blockTimestampDelay": 0
+ }
+]

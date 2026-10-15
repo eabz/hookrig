@@ -179,3 +179,37 @@ Beyond the core 17 blocks and 12 presets, the following **5 additional building 
 | **21** | **Vesting / Daily Sell Cap (`sell_cooldown`)** | Token Rules | `beforeSwap` | Low | Caps how much of a wallet's balance can be sold per 24-hour epoch (e.g., max $10\%$ of holdings per day) for team, presale, or airdrop wallets—preventing single-candle cliff dumps on-chain. |
 | **22** | **Buyback & Floor Defense (`auto_buyback`)** | Rewards & Income | `afterSwap`, `afterSwapReturnDelta` | Medium | Accumulates quote-currency tax into an internal pool reserve and automatically executes twap/band-triggered buybacks + burns whenever spot price drops below a trailing floor tick. |
 
+---
+
+## 7. Tier 3 Mutual-Exclusion Matrix (`2,843` Valid Combinations)
+
+While 22 independent bits theoretically represent $2^{22} - 1 = 4,194,303$ raw bitmaps, many naive combinations are **functionally contradictory** (for example, enabling two base fee models at once, or combining a block that reverts high-impact swaps with a block that taxes high-impact arbitrage dislocations).
+
+To eliminate contradictory interactions while preserving **all 12 curated Presets**, HookRig defines the **Tier 3 Mutual-Exclusion Matrix**, reducing the valid state space by **99.93%** from `4,194,303` raw bitmaps to **exactly `2,843` valid non-empty block combinations** across two pool archetypes:
+
+### Archetype A — Token Launch, Creator & DeFi Pools (`2,645` Valid Combinations)
+*(Pro-Trading / Institutional blocks `AccessControl`, `LimitOrders`, `TWAMM`, and `Oracle` are `0`)*
+
+| Slot | Functional Role | Allowed Block Choices | Valid States | Mutual-Exclusion Rule |
+| :---: | :--- | :--- | :---: | :--- |
+| **A1** | **Base Fee & Launch Decay** | `None`, `DynamicFee`, `DynamicFee + AntiSnipe`, `ManagedFee`, `MarketHoursFee`, `MarketHoursFee + AntiSnipe` | **`6`** | At most **1** base fee (`Dynamic`, `Managed`, `MarketHours`); `AntiSnipe` requires `DynamicFee` or `MarketHoursFee` to decay into. |
+| **A2** | **Dislocation & JIT Protection** | `None`, `MEVProtection`, `JITGuard`, `ArbRecapture`, `CircuitBreaker`, `ArbRecapture + JITGuard`, `CircuitBreaker + JITGuard` | **`7`** | At most **1** dislocation mode (`ArbRecapture` vs `MEVProtection` vs `CircuitBreaker`); `MEVProtection` already includes LP cooldown so it cannot pair with `JITGuard`. |
+| **A3** | **Holder / Dump Cap** | `None`, `WalletCap`, `VestingSellCap` | **`3`** | At most **1** balance/sell-rate cap per pool (`WalletCap` vs `VestingSellCap`). |
+| **A4** | **Sink, Revenue & LP/Trader Yield** | <ul><li>`LPRewards = 0` with no Sink/Revenue (`1` state)</li><li>`LPRewards = 1` with `Sink = None` $\times$ `{None, BuySellTax, FeeSharing, SwapRewards, BuySellTax+FeeSharing}` (`5` states)</li><li>`LPRewards = 1` with `Sink` $\in \{\text{AutoBurn}, \text{ReferralSplit}, \text{AutoBuyback}\}$ (`3`) $\times$ `{None, BuySellTax, FeeSharing, SwapRewards}` (`4`) = `12` states</li><li>`LPRewards = 1` with `Sink = KingOfThePool` $\times$ `{None, SwapRewards, FeeSharing}` (`3` states — no double buy-tax with `BuySellTax`)</li></ul> | **`21`** | At most **1** Sink/Pot/Affiliate block (`AutoBurn`, `KingOfThePool`, `ReferralSplit`, `AutoBuyback`); `SwapRewards` is mutually exclusive with `BuySellTax`/`FeeSharing`; active Sink/Revenue requires `LPRewards`. |
+
+$$\text{Total Archetype A Non-Empty Combinations} = (6 \times 7 \times 3 \times 21) - 1 = \mathbf{2,645}$$
+
+### Archetype B — Institutional & Pro-Trading Pools (`198` Valid Combinations)
+*(All 11 Retail Tokenomics / Launchpad blocks are `0`; at least one of `{AccessControl, LimitOrders, TWAMM, Oracle}` is active)*
+
+| Slot | Functional Role | Allowed Block Choices | Valid States | Mutual-Exclusion Rule |
+| :---: | :--- | :--- | :---: | :--- |
+| **B1** | **Base LP Fee** | `None`, `DynamicFee`, `ManagedFee`, `MarketHoursFee` | **`4`** | At most **1** base fee (`Dynamic`, `Managed`, `MarketHours`). |
+| **B2** | **Dislocation & JIT Protection** | `None`, `MEVProtection`, `JITGuard`, `ArbRecapture`, `CircuitBreaker`, `ArbRecapture + JITGuard`, `CircuitBreaker + JITGuard` | **`7`** | Same 7 non-contradictory protection states as Slot A2. |
+| **B3** | **Institutional / Pro Execution** | <ul><li>Permissioned Private Pool: `AccessControl`, `AccessControl + Oracle` (`2` states)</li><li>Pro Orderbook / TWAP: `Oracle`, `LimitOrders`, `TWAMM`, `LimitOrders + Oracle`, `TWAMM + Oracle`, `LimitOrders + TWAMM + Oracle` (`5` states when paired with any `B1 × B2`, plus `2` states for `LimitOrders + TWAMM` with `DynamicFee` or `ManagedFee` and `B2 = None, Oracle = 0`)</li></ul> | **`7` (`+2`)** | `AccessControl` (private pool) cannot combine with public Orderbook (`LimitOrders`, `TWAMM`). |
+
+$$\text{Total Archetype B Combinations} = (4 \times 7 \times 7) + 2 = \mathbf{198}$$
+
+$$\text{Grand Total Tier 3 Valid Combinations} = 2,645 + 198 = \mathbf{2,843}$$
+
+

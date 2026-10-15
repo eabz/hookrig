@@ -1,0 +1,644 @@
+[
+  {
+    "name": "HookRigOrchestrator",
+    "sourcePath": "src/HookRigOrchestrator.sol",
+    "artifactPath": "out/HookRigOrchestrator.sol/HookRigOrchestrator.json",
+    "constructor": {
+      "inputs": [
+        {
+          "name": "_poolManager",
+          "type": "contract",
+          "internalType": "IPoolManager"
+        },
+        {
+          "name": "_initialOwner",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    "functions": [
+      {
+        "name": "cancelLimitOrder",
+        "inputs": [
+          {
+            "name": "key",
+            "type": "tuple",
+            "internalType": "PoolKey"
+          },
+          {
+            "name": "orderId",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "primary"
+      },
+      {
+        "name": "claimKingPot",
+        "inputs": [
+          {
+            "name": "poolId",
+            "type": "bytes32",
+            "internalType": "PoolId"
+          },
+          {
+            "name": "roundId",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "to",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "primary"
+      },
+      {
+        "name": "claimLimitOrder",
+        "inputs": [
+          {
+            "name": "key",
+            "type": "tuple",
+            "internalType": "PoolKey"
+          },
+          {
+            "name": "orderId",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "primary"
+      },
+      {
+        "name": "finalizeExpiredKingRound",
+        "inputs": [
+          {
+            "name": "poolId",
+            "type": "bytes32",
+            "internalType": "PoolId"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "primary"
+      },
+      {
+        "name": "placeLimitOrder",
+        "inputs": [
+          {
+            "name": "key",
+            "type": "tuple",
+            "internalType": "PoolKey"
+          },
+          {
+            "name": "targetTick",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "zeroForOne",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "inputAmount",
+            "type": "uint128",
+            "internalType": "uint128"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "primary"
+      },
+      {
+        "name": "registerPoolStack",
+        "inputs": [
+          {
+            "name": "key",
+            "type": "tuple",
+            "internalType": "PoolKey"
+          },
+          {
+            "name": "config",
+            "type": "tuple",
+            "internalType": "IHookRigBlock.PoolStackConfig"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "secondary"
+      },
+      {
+        "name": "registerReferrer",
+        "inputs": [
+          {
+            "name": "poolId",
+            "type": "bytes32",
+            "internalType": "PoolId"
+          },
+          {
+            "name": "referrer",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "primary"
+      },
+      {
+        "name": "setAccessMerkleRoot",
+        "inputs": [
+          {
+            "name": "poolId",
+            "type": "bytes32",
+            "internalType": "PoolId"
+          },
+          {
+            "name": "newRoot",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "secondary"
+      },
+      {
+        "name": "setAllowlistAccount",
+        "inputs": [
+          {
+            "name": "poolId",
+            "type": "bytes32",
+            "internalType": "PoolId"
+          },
+          {
+            "name": "account",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "allowed",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "secondary"
+      },
+      {
+        "name": "setManagedPoolFee",
+        "inputs": [
+          {
+            "name": "key",
+            "type": "tuple",
+            "internalType": "PoolKey"
+          },
+          {
+            "name": "newFee",
+            "type": "uint24",
+            "internalType": "uint24"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "secondary"
+      },
+      {
+        "name": "submitTWAMMOrder",
+        "inputs": [
+          {
+            "name": "key",
+            "type": "tuple",
+            "internalType": "PoolKey"
+          },
+          {
+            "name": "zeroForOne",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "totalAmount",
+            "type": "uint128",
+            "internalType": "uint128"
+          },
+          {
+            "name": "durationSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "secondary"
+      },
+      {
+        "name": "withdrawClaim",
+        "inputs": [
+          {
+            "name": "poolId",
+            "type": "bytes32",
+            "internalType": "PoolId"
+          },
+          {
+            "name": "currency",
+            "type": "address",
+            "internalType": "Currency"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "to",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "primary"
+      },
+      {
+        "name": "setTrustedRouter",
+        "inputs": [
+          {
+            "name": "router",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "trusted",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "secondary"
+      }
+    ],
+    "hasReceive": false,
+    "hasFallback": false
+  },
+  {
+    "name": "HookRigToken",
+    "sourcePath": "src/launchpad/HookRigToken.sol",
+    "artifactPath": "out/HookRigToken.sol/HookRigToken.json",
+    "constructor": {
+      "inputs": [
+        {
+          "name": "name_",
+          "type": "string",
+          "internalType": "string"
+        },
+        {
+          "name": "symbol_",
+          "type": "string",
+          "internalType": "string"
+        },
+        {
+          "name": "totalSupply_",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "initialRecipient_",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "creator_",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    "functions": [
+      {
+        "name": "transfer",
+        "inputs": [
+          {
+            "name": "to",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "primary"
+      }
+    ],
+    "hasReceive": false,
+    "hasFallback": false
+  },
+  {
+    "name": "LaunchpadFactory",
+    "sourcePath": "src/launchpad/LaunchpadFactory.sol",
+    "artifactPath": "out/LaunchpadFactory.sol/LaunchpadFactory.json",
+    "constructor": {
+      "inputs": [
+        {
+          "name": "_poolManager",
+          "type": "contract",
+          "internalType": "IPoolManager"
+        },
+        {
+          "name": "_defaultOrchestrator",
+          "type": "contract",
+          "internalType": "IHookRigOrchestrator"
+        },
+        {
+          "name": "_virtualXYKImpl",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "_steppedTrancheImpl",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "_nativeTickImpl",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    "functions": [
+      {
+        "name": "launchNativeTick",
+        "inputs": [
+          {
+            "name": "meta",
+            "type": "tuple",
+            "internalType": "ITokenLaunchpad.LaunchTokenMetadata"
+          },
+          {
+            "name": "quoteCurrency",
+            "type": "address",
+            "internalType": "Currency"
+          },
+          {
+            "name": "hookContract",
+            "type": "contract",
+            "internalType": "IHookRigOrchestrator"
+          },
+          {
+            "name": "stackConfig",
+            "type": "tuple",
+            "internalType": "IHookRigBlock.PoolStackConfig"
+          },
+          {
+            "name": "nativeConfig",
+            "type": "tuple",
+            "internalType": "ITokenLaunchpad.NativeTickConfig"
+          },
+          {
+            "name": "salt",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "secondary"
+      },
+      {
+        "name": "launchSteppedTranche",
+        "inputs": [
+          {
+            "name": "meta",
+            "type": "tuple",
+            "internalType": "ITokenLaunchpad.LaunchTokenMetadata"
+          },
+          {
+            "name": "quoteCurrency",
+            "type": "address",
+            "internalType": "Currency"
+          },
+          {
+            "name": "tickSpacing",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "hookContract",
+            "type": "contract",
+            "internalType": "IHookRigOrchestrator"
+          },
+          {
+            "name": "stackConfig",
+            "type": "tuple",
+            "internalType": "IHookRigBlock.PoolStackConfig"
+          },
+          {
+            "name": "trancheConfig",
+            "type": "tuple",
+            "internalType": "ITokenLaunchpad.SteppedTrancheConfig"
+          },
+          {
+            "name": "salt",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "secondary"
+      },
+      {
+        "name": "launchVirtualXYK",
+        "inputs": [
+          {
+            "name": "meta",
+            "type": "tuple",
+            "internalType": "ITokenLaunchpad.LaunchTokenMetadata"
+          },
+          {
+            "name": "quoteCurrency",
+            "type": "address",
+            "internalType": "Currency"
+          },
+          {
+            "name": "tickSpacing",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "hookContract",
+            "type": "contract",
+            "internalType": "IHookRigOrchestrator"
+          },
+          {
+            "name": "stackConfig",
+            "type": "tuple",
+            "internalType": "IHookRigBlock.PoolStackConfig"
+          },
+          {
+            "name": "curveConfig",
+            "type": "tuple",
+            "internalType": "ITokenLaunchpad.VirtualXYKConfig"
+          },
+          {
+            "name": "salt",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "secondary"
+      }
+    ],
+    "hasReceive": false,
+    "hasFallback": false
+  },
+  {
+    "name": "SteppedTrancheLaunch",
+    "sourcePath": "src/launchpad/curves/SteppedTrancheLaunch.sol",
+    "artifactPath": "out/SteppedTrancheLaunch.sol/SteppedTrancheLaunch.json",
+    "constructor": {
+      "inputs": [
+        {
+          "name": "_poolManager",
+          "type": "contract",
+          "internalType": "IPoolManager"
+        },
+        {
+          "name": "_hookOrchestrator",
+          "type": "contract",
+          "internalType": "IHookRigOrchestrator"
+        },
+        {
+          "name": "_factory",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    "functions": [
+      {
+        "name": "buy",
+        "inputs": [
+          {
+            "name": "quoteAmountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "minTokensOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "recipient",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "payable",
+        "tier": "primary"
+      },
+      {
+        "name": "sell",
+        "inputs": [
+          {
+            "name": "tokenAmountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "minQuoteOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "recipient",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "primary"
+      }
+    ],
+    "hasReceive": true,
+    "hasFallback": false
+  },
+  {
+    "name": "VirtualXYKLaunch",
+    "sourcePath": "src/launchpad/curves/VirtualXYKLaunch.sol",
+    "artifactPath": "out/VirtualXYKLaunch.sol/VirtualXYKLaunch.json",
+    "constructor": {
+      "inputs": [
+        {
+          "name": "_poolManager",
+          "type": "contract",
+          "internalType": "IPoolManager"
+        },
+        {
+          "name": "_hookOrchestrator",
+          "type": "contract",
+          "internalType": "IHookRigOrchestrator"
+        },
+        {
+          "name": "_factory",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    "functions": [
+      {
+        "name": "buy",
+        "inputs": [
+          {
+            "name": "quoteAmountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "minTokensOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "recipient",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "payable",
+        "tier": "primary"
+      },
+      {
+        "name": "sell",
+        "inputs": [
+          {
+            "name": "tokenAmountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "minQuoteOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "recipient",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "tier": "primary"
+      }
+    ],
+    "hasReceive": true,
+    "hasFallback": false
+  }
+]

@@ -75,26 +75,52 @@ contract HookRigOrchestrator is
     // Pool Configuration & Launchpad Registration
     // =========================================================================
 
+    /// @notice Exposes Tier 3 bitmap compatibility check on the orchestrator.
+    function isValidTier3Bitmap(uint32 bitmap) public pure override returns (bool) {
+        return HookPermissionMasks.isValidTier3Bitmap(bitmap);
+    }
+
+    /// @notice Virtual internal hook for Tier 3 bitmap validation (allows fuzz harness synthetic bitmaps).
+    function _validateBitmapCompatibility(uint32 bitmap) internal view virtual {
+        if (!HookPermissionMasks.isValidTier3Bitmap(bitmap)) {
+            revert InvalidBlockBitmap(bitmap);
+        }
+    }
+
     /// @notice Registers a composable block stack or preset for a standard or launchpad Uniswap v4 pool.
     function registerPoolStack(PoolKey calldata key, PoolStackConfig calldata config) external override {
         PoolId poolId = key.toId();
         if (_poolMeta[poolId].configured) revert PoolAlreadyConfigured(poolId);
+        (uint160 existingSqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, poolId);
+        if (existingSqrtPriceX96 != 0) revert PoolAlreadyInitialized(poolId);
         bool isLaunchpad = config.authorizedCurve != address(0);
         if (isLaunchpad && msg.sender != launchpadFactory) {
             revert OnlyLaunchpadFactory(msg.sender);
         }
+        if (!isLaunchpad && config.poolAdmin != address(0) && msg.sender != config.poolAdmin && msg.sender != launchpadFactory) {
+            revert OnlyPoolAdmin(msg.sender);
+        }
         _configurePoolStackInternal(key, poolId, config, isLaunchpad, config.authorizedCurve);
     }
 
-    /// @notice Marks a launchpad pool as graduated and resets its Anti-snipe decay clock to `block.number`.
+    /// @notice Marks a launchpad pool as graduated and resets its Anti-snipe, WalletCap, and KingOfThePool clocks.
     function notifyPoolGraduated(PoolId poolId) external override {
         PoolRuntimeMeta storage meta = _poolMeta[poolId];
         if (msg.sender != meta.authorizedCurve && msg.sender != launchpadFactory) {
             revert OnlyAuthorizedCurve(msg.sender);
         }
+        if (meta.launchpadGraduated) {
+            revert PoolAlreadyGraduated(poolId);
+        }
         meta.launchpadGraduated = true;
         if ((meta.enabledBlocksBitmap & HookPermissionMasks.BIT_ANTI_SNIPE) != 0) {
             _resetAntiSnipeGraduationClock(poolId);
+        }
+        if ((meta.enabledBlocksBitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0) {
+            _resetWalletCapGraduationClock(poolId);
+        }
+        if ((meta.enabledBlocksBitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0) {
+            _resetKingGraduationClock(poolId);
         }
     }
 
@@ -107,9 +133,12 @@ contract HookRigOrchestrator is
     ) internal {
         uint32 bitmap = config.presetId == PresetId.Blank
             ? config.enabledBlocksBitmap
-            : HookPermissionMasks.getPresetBitmap(config.presetId);
+            : (HookPermissionMasks.getPresetBitmap(config.presetId) | config.enabledBlocksBitmap);
 
-        if (bitmap == 0) revert InvalidBlockBitmap(bitmap);
+        if (bitmap == 0 || (bitmap & ~HookPermissionMasks.ALL_BLOCKS_MASK) != 0) {
+            revert InvalidBlockBitmap(bitmap);
+        }
+        _validateBitmapCompatibility(bitmap);
 
         if ((bitmap & HookPermissionMasks.FEE_BLOCKS_MASK) != 0 && !key.fee.isDynamicFee()) {
             revert DynamicFeeFlagRequired();
@@ -129,14 +158,17 @@ contract HookRigOrchestrator is
             isLaunchpadPool: isLaunchpad,
             launchpadGraduated: !isLaunchpad,
             authorizedCurve: authorizedCurve,
-            poolAdmin: admin
+            poolAdmin: admin,
+            projectCurrency: config.isToken0ProjectToken ? key.currency0 : key.currency1
         });
 
         if ((bitmap & HookPermissionMasks.BIT_DYNAMIC_FEE) != 0) {
             _stageDynamicFee(poolId, config.dynamicFee);
         }
         if ((bitmap & HookPermissionMasks.BIT_MANAGED_FEE) != 0) {
-            _stageManagedFee(poolId, config.managedFee);
+            ManagedFeeParams memory mf = config.managedFee;
+            if (mf.manager == address(0)) mf.manager = admin;
+            _stageManagedFee(poolId, mf);
         }
         if ((bitmap & HookPermissionMasks.BIT_MARKET_HOURS_FEE) != 0) {
             _initMarketHoursFee(poolId, config.marketHoursFee);
@@ -151,7 +183,9 @@ contract HookRigOrchestrator is
             _stageArbRecapture(poolId, config.arbRecapture);
         }
         if ((bitmap & HookPermissionMasks.BIT_ACCESS_CONTROL) != 0) {
-            _initAccessControl(poolId, config.accessControl);
+            AccessControlParams memory ac = config.accessControl;
+            if (ac.manager == address(0)) ac.manager = admin;
+            _initAccessControl(poolId, ac);
         }
         if ((bitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0) {
             _initWalletCap(poolId, config.walletCap);
@@ -194,6 +228,53 @@ contract HookRigOrchestrator is
         emit PoolStackConfigured(poolId, config.presetId, bitmap, admin);
     }
 
+    /// @notice Updates the Buy/Sell Tax configuration for `poolId` (callable only by `poolAdmin`),
+    ///         re-verifying the directional `2500 bps` aggregate return-delta budget.
+    function setBuySellTax(PoolId poolId, uint16 buyTaxBps, uint16 sellTaxBps, address taxRecipient) external override {
+        PoolRuntimeMeta storage meta = _poolMeta[poolId];
+        if (!meta.configured) revert PoolNotConfigured(poolId);
+        if (msg.sender != meta.poolAdmin) revert OnlyPoolAdmin(msg.sender);
+
+        uint32 bitmap = meta.enabledBlocksBitmap;
+        uint256 otherBuyBps = _protocolRoyaltyBps();
+        uint256 otherSellBps = _protocolRoyaltyBps();
+
+        if ((bitmap & HookPermissionMasks.BIT_ARB_RECAPTURE) != 0 && _arbStates[poolId].recaptureShareBps > 0) {
+            otherBuyBps += 1000;
+            otherSellBps += 1000;
+        }
+        if ((bitmap & HookPermissionMasks.BIT_AUTO_BURN) != 0) {
+            otherBuyBps += _autoBurnConfigs[poolId].burnOnBuyBps;
+        }
+        if ((bitmap & HookPermissionMasks.BIT_FEE_SHARING) != 0) {
+            otherBuyBps += _feeSharingConfigs[poolId].feeShareBps;
+            otherSellBps += _feeSharingConfigs[poolId].feeShareBps;
+        }
+        if ((bitmap & HookPermissionMasks.BIT_LP_REWARDS) != 0) {
+            otherBuyBps += _lpRewardsConfigs[poolId].extraBuyFeeBps;
+        }
+        if ((bitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0) {
+            otherBuyBps += _kingStates[poolId].potFeeOnBuyBps;
+        }
+        if ((bitmap & HookPermissionMasks.BIT_REFERRAL_SPLIT) != 0) {
+            otherBuyBps += _referralConfigs[poolId].referralFeeBps;
+            otherSellBps += _referralConfigs[poolId].referralFeeBps;
+        }
+        if ((bitmap & HookPermissionMasks.BIT_AUTO_BUYBACK) != 0) {
+            otherBuyBps += _autoBuybackStates[poolId].buybackFeeBps;
+            otherSellBps += _autoBuybackStates[poolId].buybackFeeBps;
+        }
+
+        uint256 newBuyTotal = otherBuyBps + buyTaxBps;
+        uint256 newSellTotal = otherSellBps + sellTaxBps;
+        uint256 maxTotal = newBuyTotal > newSellTotal ? newBuyTotal : newSellTotal;
+        if (maxTotal > MAX_AGGREGATE_AFTER_SWAP_BPS) {
+            revert AggregateReturnDeltaBpsExceeded(maxTotal, MAX_AGGREGATE_AFTER_SWAP_BPS);
+        }
+
+        _updateBuySellTax(poolId, buyTaxBps, sellTaxBps, taxRecipient);
+    }
+
     // =========================================================================
     // Uniswap v4 Hook Lifecycle Callbacks
     // =========================================================================
@@ -206,6 +287,9 @@ contract HookRigOrchestrator is
     {
         PoolId poolId = key.toId();
         PoolRuntimeMeta storage meta = _poolMeta[poolId];
+        if (!meta.configured) {
+            revert PoolNotConfigured(poolId);
+        }
 
         if (meta.isLaunchpadPool && sender != meta.authorizedCurve && sender != launchpadFactory) {
             revert UnauthorizedPoolInitializer(sender);
@@ -256,10 +340,14 @@ contract HookRigOrchestrator is
         bytes calldata hookData
     ) internal virtual override returns (bytes4) {
         PoolId poolId = key.toId();
-        uint32 bitmap = _poolMeta[poolId].enabledBlocksBitmap;
+        PoolRuntimeMeta storage meta = _poolMeta[poolId];
+        uint32 bitmap = meta.enabledBlocksBitmap;
         address user = _resolveUser(sender, hookData);
 
-        if ((bitmap & HookPermissionMasks.BIT_ACCESS_CONTROL) != 0) {
+        if (
+            (bitmap & HookPermissionMasks.BIT_ACCESS_CONTROL) != 0
+                && !(meta.isLaunchpadPool && sender == meta.authorizedCurve)
+        ) {
             _verifyAccess(poolId, user, hookData, true);
         }
 
@@ -381,27 +469,34 @@ contract HookRigOrchestrator is
         ctx.postSwapTick = postTick;
 
         uint256 totalCutAmount;
-        (hookDeltaUnspecified, totalCutAmount) = _executeAfterSwapDeltaWaterfall(poolManager, key, poolId, bitmap, ctx);
+        (hookDeltaUnspecified, totalCutAmount) =
+            _executeAfterSwapDeltaWaterfall(poolManager, key, poolId, bitmap, isToken0Project, ctx);
 
-        if ((bitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0 && ctx.isBuy) {
-            uint256 netTokensToBuyer = 0;
-            if (ctx.isExactInput && ctx.grossUnspecifiedAmount > totalCutAmount) {
-                netTokensToBuyer = ctx.grossUnspecifiedAmount - totalCutAmount;
-            } else if (!ctx.isExactInput && params.amountSpecified > 0) {
-                netTokensToBuyer = uint256(params.amountSpecified);
+        if ((bitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0) {
+            if (ctx.isBuy) {
+                uint256 netTokensToBuyer = 0;
+                if (ctx.isExactInput && ctx.grossUnspecifiedAmount > totalCutAmount) {
+                    netTokensToBuyer = ctx.grossUnspecifiedAmount - totalCutAmount;
+                } else if (!ctx.isExactInput) {
+                    netTokensToBuyer = ctx.settledSpecifiedAmount;
+                }
+                _enforceWalletCapAfterBuy(poolId, ctx.projectCurrency, ctx.trader, netTokensToBuyer);
+            } else {
+                TransientContext.setWalletCapExpectedBalance(poolId, ctx.trader, 0);
             }
-            _enforceWalletCapAfterBuy(poolId, ctx.projectCurrency, ctx.trader, netTokensToBuyer);
         }
 
         if ((bitmap & HookPermissionMasks.BIT_VESTING_SELL_CAP) != 0 && !ctx.isBuy) {
-            uint256 projectTokensSold = ctx.isExactInput
-                ? (params.amountSpecified < 0 ? uint256(-params.amountSpecified) : 0)
-                : ctx.grossUnspecifiedAmount + totalCutAmount;
+            uint256 projectTokensSold =
+                ctx.isExactInput ? ctx.settledSpecifiedAmount : (ctx.grossUnspecifiedAmount + totalCutAmount);
             _enforceVestingSellCap(poolId, ctx.projectCurrency, ctx.trader, projectTokensSold);
         }
 
         if ((bitmap & HookPermissionMasks.BIT_SWAP_REWARDS) != 0) {
-            _accrueSwapRewards(poolId, ctx.trader, ctx.grossUnspecifiedAmount);
+            uint256 netRewardVolume = ctx.grossUnspecifiedAmount > totalCutAmount
+                ? ctx.grossUnspecifiedAmount - totalCutAmount
+                : 0;
+            _accrueSwapRewards(poolId, ctx.trader, netRewardVolume);
         }
 
         if ((bitmap & HookPermissionMasks.BIT_LIMIT_ORDERS) != 0) {
@@ -416,11 +511,12 @@ contract HookRigOrchestrator is
     /// @notice Pull-based jackpot claim for finalized King of the Pool rounds.
     function claimKingPot(PoolId poolId, uint64 roundId, address to) external nonReentrant {
         (Currency currency, uint256 reward) = _validateKingClaim(poolId, roundId);
-        _payoutERC6909Claim(currency, to, reward);
+        address recipient = to == address(0) ? msg.sender : to;
+        _payoutERC6909Claim(currency, recipient, reward);
     }
 
     /// @notice Allows an authorized LaunchCurve to seed initial sniper surcharges into Round #1 King of the Pool pot
-    ///         (or into `poolAdmin` ERC-6909 claims if the pot already holds a different currency).
+    ///         (or into `poolAdmin` ERC-6909 claims if `currency` is not the pool's project token).
     function seedKingPotFromLaunchCurve(PoolId poolId, Currency currency, uint256 amount) external override {
         PoolRuntimeMeta storage meta = _poolMeta[poolId];
         if (msg.sender != meta.authorizedCurve && msg.sender != launchpadFactory) {
@@ -430,6 +526,7 @@ contract HookRigOrchestrator is
         Currency existing = _kingStates[poolId].potCurrency;
         if (
             (meta.enabledBlocksBitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0
+                && currency == meta.projectCurrency
                 && (_kingStates[poolId].currentPotAmount == 0 || existing == currency)
         ) {
             _kingStates[poolId].potCurrency = currency;
@@ -438,6 +535,14 @@ contract HookRigOrchestrator is
             address admin = meta.poolAdmin != address(0) ? meta.poolAdmin : owner();
             poolClaims[poolId][currency][admin] += amount;
         }
+    }
+
+    function _protocolRoyaltyBps() internal view virtual override returns (uint16) {
+        return PROTOCOL_ROYALTY_BPS;
+    }
+
+    function _protocolRoyaltyRecipient() internal view virtual override returns (address) {
+        return PROTOCOL_ROYALTY_RECIPIENT;
     }
 
     function _creditClaimInternal(PoolId poolId, Currency currency, address beneficiary, uint256 amount)

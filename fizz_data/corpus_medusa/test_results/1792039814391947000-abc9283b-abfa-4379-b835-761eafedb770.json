@@ -1,0 +1,27 @@
+[
+ {
+  "call": {
+   "from": "0x0000000000000000000000000000000000030000",
+   "to": "0x3b30442af86235c217e2d4aaab0a058fe7fc7d14",
+   "nonce": 0,
+   "value": "0x0",
+   "gasLimit": 1500000000,
+   "gasPrice": "0x1",
+   "gasFeeCap": "0x0",
+   "gasTipCap": "0x0",
+   "data": "0xd262ff2b00000000000000000000000000000000000000000000000000000000000b8438000000000000000000000000000000000000000000000000000000000055c956",
+   "dataAbiValues": {
+    "methodSignature": "hookRigOrchestrator_accumulatorGrief(uint256,int24)",
+    "inputValues": [
+     "754744",
+     "5622102"
+    ]
+   },
+   "AccessList": null,
+   "SkipNonceChecks": true,
+   "SkipFromEOACheck": true
+  },
+  "blockNumberDelay": 6651,
+  "blockTimestampDelay": 559050
+ }
+]

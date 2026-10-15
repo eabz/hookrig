@@ -90,14 +90,6 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         uint256 remainingToTarget = curveConfig.graduationQuoteTarget - realQuoteRaised;
         quoteUsed = quoteAmountIn > remainingToTarget ? remainingToTarget : quoteAmountIn;
 
-        // Collect quote asset from buyer
-        if (quoteCurrency.isAddressZero()) {
-            require(msg.value >= quoteUsed, "Insufficient ETH");
-        } else {
-            require(msg.value == 0, "Unexpected ETH");
-            IERC20(Currency.unwrap(quoteCurrency)).safeTransferFrom(msg.sender, address(this), quoteUsed);
-        }
-
         // Virtual XYK math: newY = ceil(k / (X_virtual + quoteUsed)), tokensOut = floor(Y_virtual - newY)
         uint256 newVirtualQuote = virtualQuoteReserve + quoteUsed;
         uint256 newVirtualToken = Math.mulDiv(invariantK, 1, newVirtualQuote, Math.Rounding.Ceil);
@@ -106,9 +98,20 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         uint256 remainingCurveTokens = curveConfig.curveTokenAllocation - curveTokensSold;
         if (tokensOut > remainingCurveTokens) {
             tokensOut = remainingCurveTokens;
+            newVirtualToken = virtualTokenReserve - tokensOut;
+            newVirtualQuote = Math.mulDiv(invariantK, 1, newVirtualToken, Math.Rounding.Ceil);
+            quoteUsed = newVirtualQuote > virtualQuoteReserve ? newVirtualQuote - virtualQuoteReserve : 0;
         }
         if (tokensOut < minTokensOut) {
             revert SlippageExceeded(tokensOut, minTokensOut);
+        }
+
+        // Collect exact quoteUsed from buyer
+        if (quoteCurrency.isAddressZero()) {
+            require(msg.value >= quoteUsed, "Insufficient ETH");
+        } else {
+            require(msg.value == 0, "Unexpected ETH");
+            IERC20(Currency.unwrap(quoteCurrency)).safeTransferFrom(msg.sender, address(this), quoteUsed);
         }
 
         virtualQuoteReserve = newVirtualQuote;
@@ -128,10 +131,9 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
 
         IERC20(projectToken).safeTransfer(recipient, tokensOut);
 
-        // Refund any excess ETH/quote above the graduation threshold
-        uint256 refund = quoteCurrency.isAddressZero() ? (msg.value - quoteUsed) : (quoteAmountIn - quoteUsed);
-        if (refund > 0 && quoteCurrency.isAddressZero()) {
-            quoteCurrency.transfer(msg.sender, refund);
+        // Refund any excess ETH above quoteUsed
+        if (quoteCurrency.isAddressZero() && msg.value > quoteUsed) {
+            quoteCurrency.transfer(msg.sender, msg.value - quoteUsed);
         }
 
         emit CurveBuy(recipient, quoteUsed, tokensOut, 0, realQuoteRaised);
@@ -150,7 +152,7 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         returns (uint256 quoteOut)
     {
         if (launchState != LaunchState.ActiveBonding) revert CurveNotActive();
-        if (tokenAmountIn == 0) revert ZeroAmount();
+        if (tokenAmountIn == 0 || tokenAmountIn > curveTokensSold) revert ZeroAmount();
         if (recipient == address(0)) recipient = msg.sender;
 
         IERC20(projectToken).safeTransferFrom(msg.sender, address(this), tokenAmountIn);
@@ -158,8 +160,10 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         uint256 newVirtualToken = virtualTokenReserve + tokenAmountIn;
         uint256 newVirtualQuote = Math.mulDiv(invariantK, 1, newVirtualToken, Math.Rounding.Ceil);
         quoteOut = virtualQuoteReserve > newVirtualQuote ? virtualQuoteReserve - newVirtualQuote : 0;
+        bool clamped = false;
         if (quoteOut > realQuoteRaised) {
             quoteOut = realQuoteRaised;
+            clamped = true;
         }
         if (quoteOut < minQuoteOut) {
             revert SlippageExceeded(quoteOut, minQuoteOut);
@@ -168,7 +172,10 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         virtualTokenReserve = newVirtualToken;
         virtualQuoteReserve -= quoteOut;
         realQuoteRaised -= quoteOut;
-        curveTokensSold = curveTokensSold > tokenAmountIn ? curveTokensSold - tokenAmountIn : 0;
+        curveTokensSold -= tokenAmountIn;
+        if (clamped) {
+            invariantK = virtualQuoteReserve * virtualTokenReserve;
+        }
 
         quoteCurrency.transfer(recipient, quoteOut);
 
@@ -179,21 +186,37 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         launchState = LaunchState.Graduated;
 
         uint256 quoteToSeed = realQuoteRaised;
-        uint256 tokensToSeed = curveConfig.lpTokenReserve;
+        uint256 continuousLpTokens =
+            Math.mulDiv(virtualTokenReserve, quoteToSeed, virtualQuoteReserve, Math.Rounding.Floor);
+        uint256 availableTokens = IERC20(projectToken).balanceOf(address(this));
+        if (continuousLpTokens > availableTokens) {
+            continuousLpTokens = availableTokens;
+        }
+        if (continuousLpTokens == 0) {
+            continuousLpTokens = curveConfig.lpTokenReserve;
+        }
+        curveConfig.lpTokenReserve = uint128(continuousLpTokens);
+        uint256 tokensToSeed = continuousLpTokens;
 
         // Spot-price continuous sqrtPriceX96 = sqrt(tokensToSeed / quoteToSeed) * 2^96
-        uint256 ratioX192 = Math.mulDiv(tokensToSeed, uint256(1) << 192, quoteToSeed, Math.Rounding.Floor);
-        uint160 graduationSqrtPriceX96 = uint160(Math.sqrt(ratioX192));
-        if (graduationSqrtPriceX96 < TickMath.MIN_SQRT_PRICE) {
+        uint160 graduationSqrtPriceX96;
+        if (tokensToSeed <= type(uint64).max) {
+            uint256 ratioX192 = Math.mulDiv(tokensToSeed, uint256(1) << 192, quoteToSeed, Math.Rounding.Floor);
+            graduationSqrtPriceX96 = uint160(Math.sqrt(ratioX192));
+        } else {
+            uint256 ratioX128 = Math.mulDiv(tokensToSeed, uint256(1) << 128, quoteToSeed, Math.Rounding.Floor);
+            graduationSqrtPriceX96 = uint160(Math.sqrt(ratioX128) << 32);
+        }
+        if (graduationSqrtPriceX96 <= TickMath.MIN_SQRT_PRICE) {
             graduationSqrtPriceX96 = TickMath.MIN_SQRT_PRICE + 1;
         }
-        if (graduationSqrtPriceX96 > TickMath.MAX_SQRT_PRICE) {
+        if (graduationSqrtPriceX96 >= TickMath.MAX_SQRT_PRICE) {
             graduationSqrtPriceX96 = TickMath.MAX_SQRT_PRICE - 1;
         }
 
         // Initialize the canonical Uniswap v4 pool and reset the Anti-Snipe graduation clock
         poolManager.initialize(poolKey, graduationSqrtPriceX96);
-        hookOrchestrator.notifyPoolGraduated(poolId);
+        IHookRigOrchestrator(address(poolKey.hooks)).notifyPoolGraduated(poolId);
 
         // Seed permanent full-range liquidity inside PoolManager.unlock
         poolManager.unlock(abi.encode(quoteToSeed, tokensToSeed));
@@ -223,6 +246,20 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         }
         if (callerDelta.amount1() < 0) {
             poolKey.currency1.settle(poolManager, address(this), uint256(uint128(-callerDelta.amount1())), false);
+        }
+
+        uint256 remQuote = poolKey.currency0.isAddressZero()
+            ? address(this).balance
+            : IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(address(this));
+        uint256 remToken = IERC20(projectToken).balanceOf(address(this));
+        if (remQuote > 0 || remToken > 0) {
+            BalanceDelta donateDelta = poolManager.donate(poolKey, remQuote, remToken, "");
+            if (donateDelta.amount0() < 0) {
+                poolKey.currency0.settle(poolManager, address(this), uint256(uint128(-donateDelta.amount0())), false);
+            }
+            if (donateDelta.amount1() < 0) {
+                poolKey.currency1.settle(poolManager, address(this), uint256(uint128(-donateDelta.amount1())), false);
+            }
         }
 
         return "";

@@ -23,9 +23,12 @@ library ManagedFeeLogic {
     function stage(
         mapping(PoolId => ManagedFeeState) storage states,
         PoolId poolId,
-        IHookRigBlock.ManagedFeeParams calldata params
+        IHookRigBlock.ManagedFeeParams memory params
     ) external {
-        uint24 cap = params.feeCap == 0 || params.feeCap > MAX_MANAGED_FEE_CAP ? MAX_MANAGED_FEE_CAP : params.feeCap;
+        if (params.feeCap > MAX_MANAGED_FEE_CAP) {
+            revert ManagedFeeExceedsCap(params.feeCap, MAX_MANAGED_FEE_CAP);
+        }
+        uint24 cap = params.feeCap == 0 ? MAX_MANAGED_FEE_CAP : params.feeCap;
         if (params.startingFee > cap) {
             revert ManagedFeeExceedsCap(params.startingFee, cap);
         }
@@ -56,7 +59,7 @@ abstract contract ManagedFeeBlock is IHookRigBlock {
     error UnauthorizedFeeManager(address caller);
     error ManagedFeeExceedsCap(uint24 requestedFee, uint24 feeCap);
 
-    function _stageManagedFee(PoolId poolId, ManagedFeeParams calldata params) internal {
+    function _stageManagedFee(PoolId poolId, ManagedFeeParams memory params) internal {
         ManagedFeeLogic.stage(_managedFeeStates, poolId, params);
     }
 

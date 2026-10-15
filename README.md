@@ -6,9 +6,8 @@
 
 [![CI](https://github.com/eabz/hookrig/actions/workflows/test.yml/badge.svg)](./.github/workflows/test.yml)
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.26-363636?logo=solidity)](./foundry.toml)
-[![EVM](https://img.shields.io/badge/EVM-Cancun%20(EIP--1153)-blue)](./foundry.toml)
 [![Uniswap v4](https://img.shields.io/badge/Uniswap-v4-FF007A?logo=uniswap)](https://github.com/Uniswap/v4-core)
-[![OpenZeppelin](https://img.shields.io/badge/OpenZeppelin-v5%20%2B%20uniswap--hooks-4E5EE4?logo=openzeppelin)](https://github.com/OpenZeppelin/uniswap-hooks)
+[![OpenZeppelin](https://img.shields.io/badge/OpenZeppelin-v5-4E5EE4?logo=openzeppelin)](https://github.com/OpenZeppelin/uniswap-hooks)
 [![Foundry](https://img.shields.io/badge/Built%20with-Foundry-FFDB1C)](https://book.getfoundry.sh/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -119,7 +118,8 @@ Launch tokens via [`LaunchpadFactory`](./src/launchpad/LaunchpadFactory.sol) wit
 | [**03. Hooks Execution Flow**](./docs/03-hooks-flow.md) | Callback sequence diagrams, `FeeAggregator`, and `AfterSwapDeltaAggregator` waterfall. |
 | [**04. Security Mechanics & Caveats**](./docs/04-security-mechanics-and-caveats.md) | Real-world v4 exploit defenses (Cork Protocol, Bunni V2), rounding laws, and hard caps. |
 | [**05. Token Launchpad Mechanics**](./docs/05-token-launch-mechanics.md) | Bonding math, `Create2` address sorting, and graduation security invariants. |
-| [**06. Attack Vectors & Code Fixes**](./docs/06-attack-vectors-and-fixes.md) | Complete catalog of all 14 attack vectors mapped to exact `src/` code fixes and `test/` regression tests. |
+| [**06. Attack Vectors & Code Fixes**](./docs/06-attack-vectors-and-fixes.md) | Complete catalog of all 14 attack vectors, 6 anti-freeze guarantees, and Tier 3 mutex rules (`2,843` valid combinations). |
+| [**07. Roadmap & Post-Review TODOs**](./docs/07-roadmap-and-todo.md) | Queued `src/` enhancements, Tier 3 mutual-exclusion enforcement spec, and Hoodi deployment checklist. |
 
 ---
 

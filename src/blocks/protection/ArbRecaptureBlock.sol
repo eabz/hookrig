@@ -17,6 +17,7 @@ library ArbRecaptureLogic {
     }
 
     error ArbRecaptureShareTooHigh(uint16 requestedBps);
+    error InvalidArbTriggerTickDelta(int24 triggerTickDelta);
 
     function stage(
         mapping(PoolId => ArbRecaptureState) storage states,
@@ -25,6 +26,9 @@ library ArbRecaptureLogic {
     ) external {
         if (params.recaptureShareBps > MAX_ARB_RECAPTURE_SHARE_BPS) {
             revert ArbRecaptureShareTooHigh(params.recaptureShareBps);
+        }
+        if (params.arbTriggerTickDelta < 0 || params.arbTriggerTickDelta > 100_000) {
+            revert InvalidArbTriggerTickDelta(params.arbTriggerTickDelta);
         }
         ArbRecaptureState storage st = states[poolId];
         st.recaptureShareBps = params.recaptureShareBps;
@@ -40,21 +44,25 @@ library ArbRecaptureLogic {
         ArbRecaptureState storage state = states[poolId];
         if (state.recaptureShareBps == 0) return 0;
 
-        int24 refTick = state.referenceTick;
-        int24 swapTickMoved = postSwapTick >= preSwapTick ? postSwapTick - preSwapTick : preSwapTick - postSwapTick;
-        int24 refTickMoved = postSwapTick >= refTick ? postSwapTick - refTick : refTick - postSwapTick;
-        int24 tickMoved = refTickMoved > swapTickMoved ? refTickMoved : swapTickMoved;
-
         if (block.number > state.lastUpdatedBlock) {
             state.referenceTick = preSwapTick;
             state.lastUpdatedBlock = uint32(block.number);
         }
 
-        if (tickMoved <= state.arbTriggerTickDelta) {
+        int24 refTick = state.referenceTick;
+        int256 swapTickMoved = postSwapTick >= preSwapTick
+            ? int256(postSwapTick) - int256(preSwapTick)
+            : int256(preSwapTick) - int256(postSwapTick);
+        int256 refTickMoved = postSwapTick >= refTick
+            ? int256(postSwapTick) - int256(refTick)
+            : int256(refTick) - int256(postSwapTick);
+        int256 tickMoved = refTickMoved > swapTickMoved ? refTickMoved : swapTickMoved;
+
+        if (tickMoved <= int256(state.arbTriggerTickDelta)) {
             return 0;
         }
 
-        uint256 excessTicks = uint256(int256(tickMoved - state.arbTriggerTickDelta));
+        uint256 excessTicks = uint256(tickMoved - int256(state.arbTriggerTickDelta));
         uint256 rawCutBps = Math.mulDiv(excessTicks, state.recaptureShareBps, 10_000, Math.Rounding.Floor);
         if (rawCutBps > MAX_ARB_EFFECTIVE_CUT_BPS) {
             rawCutBps = MAX_ARB_EFFECTIVE_CUT_BPS;

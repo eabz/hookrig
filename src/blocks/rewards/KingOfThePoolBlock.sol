@@ -7,6 +7,8 @@ import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
 library KingOfThePoolLogic {
     uint16 internal constant MAX_KING_POT_BPS = 500; // 5.00%
+    uint32 internal constant MIN_KING_ROUND_DURATION = 60; // 1 minute
+    uint32 internal constant MAX_KING_ROUND_DURATION = 30 days; // 30 days
 
     struct KingRoundState {
         uint16 potFeeOnBuyBps;
@@ -40,6 +42,7 @@ library KingOfThePoolLogic {
     event KingPotClaimed(PoolId indexed poolId, uint64 indexed roundId, address indexed winner, uint256 amount);
 
     error KingPotBpsExceedsCap(uint16 requestedBps);
+    error InvalidKingRoundDuration(uint32 durationSeconds);
     error RoundNotClaimable(PoolId poolId, uint64 roundId);
     error NotRoundWinner(address caller, address winner);
 
@@ -51,6 +54,13 @@ library KingOfThePoolLogic {
     ) external {
         if (params.potFeeOnBuyBps > MAX_KING_POT_BPS) {
             revert KingPotBpsExceedsCap(params.potFeeOnBuyBps);
+        }
+        if (
+            overrideDuration == 0 && params.roundDurationSeconds != 0
+                && (params.roundDurationSeconds < MIN_KING_ROUND_DURATION
+                    || params.roundDurationSeconds > MAX_KING_ROUND_DURATION)
+        ) {
+            revert InvalidKingRoundDuration(params.roundDurationSeconds);
         }
         uint32 duration = overrideDuration > 0
             ? overrideDuration
@@ -84,7 +94,10 @@ library KingOfThePoolLogic {
         }
 
         if (potContribution > 0) {
-            state.potCurrency = cutCurrency;
+            if (state.currentPotAmount == 0) {
+                state.potCurrency = cutCurrency;
+            }
+            require(Currency.unwrap(state.potCurrency) == Currency.unwrap(cutCurrency), "CurrencyMismatch");
             state.currentPotAmount += potContribution;
         }
 
@@ -155,6 +168,13 @@ abstract contract KingOfThePoolBlock is IHookRigBlock {
 
     function _initKingOfThePool(PoolId poolId, KingOfThePoolParams calldata params, uint32 overrideDuration) internal {
         KingOfThePoolLogic.initKing(_kingStates, poolId, params, overrideDuration);
+    }
+
+    function _resetKingGraduationClock(PoolId poolId) internal {
+        KingOfThePoolLogic.KingRoundState storage s = _kingStates[poolId];
+        if (s.roundDurationSeconds > 0) {
+            s.roundDeadline = uint64(block.timestamp + s.roundDurationSeconds);
+        }
     }
 
     /// @notice Processes a buy contribution into the King of the Pool pot and updates the countdown timer.

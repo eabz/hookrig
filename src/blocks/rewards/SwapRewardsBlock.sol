@@ -34,11 +34,18 @@ library SwapRewardsLogic {
 /// @notice Group 4 (Rewards & Income) — Block #13: Accrues loyalty reward points per swap (`afterSwap`).
 /// @dev Trust Level: Low (non-custodial point accumulator; zero delta impact).
 abstract contract SwapRewardsBlock is IHookRigBlock {
+    uint128 internal constant MAX_POINTS_PER_UNIT_VOLUME = 1e27;
+
     mapping(PoolId poolId => SwapRewardsParams config) internal _swapRewardsConfigs;
     mapping(PoolId poolId => mapping(address trader => uint256 points)) public swapRewardPoints;
     mapping(PoolId poolId => uint256 totalPoints) public totalPoolSwapPoints;
 
+    error SwapRewardPointsRateTooHigh(uint128 requestedRate);
+
     function _initSwapRewards(PoolId poolId, SwapRewardsParams calldata params) internal {
+        if (params.pointsPerUnitVolume > MAX_POINTS_PER_UNIT_VOLUME) {
+            revert SwapRewardPointsRateTooHigh(params.pointsPerUnitVolume);
+        }
         _swapRewardsConfigs[poolId] = params;
     }
 

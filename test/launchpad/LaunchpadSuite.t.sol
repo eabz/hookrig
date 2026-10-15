@@ -136,6 +136,14 @@ contract LaunchpadSuiteTest is HookRigTestBase {
             maxWalletBpsDuringCurve: 5000 // 50% max wallet during curve
         });
 
+        // Post-graduation walletCap (0 bps) < curve maxWalletBpsDuringCurve (5000 bps) reverts
+        vm.expectRevert(abi.encodeWithSelector(LaunchpadFactory.PostGraduationWalletCapBelowCurveCap.selector, 0, 5000));
+        launchpadFactory.launchVirtualXYK(
+            meta, quoteCurrency, 60, IHookRigOrchestrator(address(0)), stackCfg, curveCfg, salt
+        );
+
+        stackCfg.walletCap = IHookRigBlock.WalletCapParams({maxWalletBps: 5000, sunsetBlocks: 100});
+
         (address tokenAddr, address curveAddr, PoolKey memory key) = launchpadFactory.launchVirtualXYK(
             meta, quoteCurrency, 60, IHookRigOrchestrator(address(0)), stackCfg, curveCfg, salt
         );

@@ -132,14 +132,17 @@ contract HookRigInvariantTest is HookRigTestBase {
         uint256 orcBal0 = poolManager.balanceOf(address(orchestrator), currency0.toId());
         uint256 orcBal1 = poolManager.balanceOf(address(orchestrator), currency1.toId());
 
+        address royaltyRecipient = orchestrator.PROTOCOL_ROYALTY_RECIPIENT();
         uint256 claims0 = orchestrator.poolClaims(invPoolId, currency0, treasury)
             + orchestrator.poolClaims(invPoolId, currency0, charity)
-            + orchestrator.poolClaims(invPoolId, currency0, bob);
+            + orchestrator.poolClaims(invPoolId, currency0, bob)
+            + orchestrator.poolClaims(invPoolId, currency0, royaltyRecipient);
 
         (,, uint256 kingPot,) = orchestrator.getCurrentKing(invPoolId);
         uint256 claims1 = orchestrator.poolClaims(invPoolId, currency1, treasury)
             + orchestrator.poolClaims(invPoolId, currency1, charity)
-            + orchestrator.poolClaims(invPoolId, currency1, bob) + kingPot;
+            + orchestrator.poolClaims(invPoolId, currency1, bob)
+            + orchestrator.poolClaims(invPoolId, currency1, royaltyRecipient) + kingPot;
 
         assertGe(orcBal0, claims0, "Currency0 ERC-6909 insolvency");
         assertGe(orcBal1, claims1, "Currency1 ERC-6909 insolvency");
@@ -281,6 +284,12 @@ contract HookRigInvariantTest is HookRigTestBase {
             tickSpacing: 120,
             hooks: invKey.hooks
         });
+
+        if (!orchestrator.isValidTier3Bitmap(bitmap)) {
+            vm.expectRevert(abi.encodeWithSelector(IHookRigOrchestrator.InvalidBlockBitmap.selector, bitmap));
+            orchestrator.registerPoolStack(customKey, cfg);
+            return;
+        }
 
         orchestrator.registerPoolStack(customKey, cfg);
         poolManager.initialize(customKey, SQRT_PRICE_1_1);

@@ -12,6 +12,7 @@ library JITGuardLogic {
     }
 
     error JITLiquidityCooldownActive(uint32 addedBlock, uint32 currentBlock, uint32 minHoldBlocks);
+    error InvalidJITGuardConfig(uint32 minLPHoldBlocks, uint16 jitExitPenaltyBps);
 
     function recordAddition(
         mapping(PoolId => mapping(bytes32 => uint32)) storage lpAddedBlock,
@@ -20,7 +21,13 @@ library JITGuardLogic {
         ModifyLiquidityParams calldata params
     ) external {
         bytes32 posKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
-        lpAddedBlock[poolId][posKey] = uint32(block.number);
+        if (lpAddedBlock[poolId][posKey] == 0) {
+            lpAddedBlock[poolId][posKey] = uint32(block.number);
+        }
+        bytes32 rangeKey = keccak256(abi.encodePacked(params.tickLower, params.tickUpper, params.salt));
+        if (lpAddedBlock[poolId][rangeKey] == 0) {
+            lpAddedBlock[poolId][rangeKey] = uint32(block.number);
+        }
     }
 
     function enforceOnRemove(
@@ -35,7 +42,11 @@ library JITGuardLogic {
 
         bytes32 posKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
         uint32 addedBlock = lpAddedBlock[poolId][posKey];
-        if (addedBlock > 0 && block.number < addedBlock + minHold) {
+        if (addedBlock == 0) {
+            bytes32 rangeKey = keccak256(abi.encodePacked(params.tickLower, params.tickUpper, params.salt));
+            addedBlock = lpAddedBlock[poolId][rangeKey];
+        }
+        if (addedBlock > 0 && block.number < uint256(addedBlock) + uint256(minHold)) {
             revert JITLiquidityCooldownActive(addedBlock, uint32(block.number), minHold);
         }
     }
@@ -50,11 +61,14 @@ abstract contract JITGuardBlock is IHookRigBlock {
     mapping(PoolId poolId => mapping(bytes32 positionKey => uint32 addedAtBlock)) internal _lpAddedBlock;
 
     uint32 internal constant MAX_LP_HOLD_BLOCKS = 7200; // ~24h ceiling so LPs can never be permanently locked
+    uint16 internal constant MAX_JIT_PENALTY_BPS = 5000; // 50.00%
 
     function _initJITGuard(PoolId poolId, uint32 minLPHoldBlocks, uint16 jitExitPenaltyBps) internal {
-        uint32 cappedHold = minLPHoldBlocks > MAX_LP_HOLD_BLOCKS ? MAX_LP_HOLD_BLOCKS : minLPHoldBlocks;
+        if (minLPHoldBlocks > MAX_LP_HOLD_BLOCKS || jitExitPenaltyBps > MAX_JIT_PENALTY_BPS) {
+            revert JITGuardLogic.InvalidJITGuardConfig(minLPHoldBlocks, jitExitPenaltyBps);
+        }
         _jitConfigs[poolId] =
-            JITGuardLogic.JITConfig({minLPHoldBlocks: cappedHold, jitExitPenaltyBps: jitExitPenaltyBps});
+            JITGuardLogic.JITConfig({minLPHoldBlocks: minLPHoldBlocks, jitExitPenaltyBps: jitExitPenaltyBps});
     }
 
     function _recordLPAddition(PoolId poolId, address lpOwner, ModifyLiquidityParams calldata params) internal {

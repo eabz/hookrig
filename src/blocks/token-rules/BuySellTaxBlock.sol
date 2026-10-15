@@ -41,7 +41,7 @@ library BuySellTaxLogic {
         if (cfg.decayOnly && (newBuyTaxBps > cfg.buyTaxBps || newSellTaxBps > cfg.sellTaxBps)) {
             revert TaxIncreaseForbiddenInDecayOnlyMode();
         }
-        if ((newBuyTaxBps > 0 || newSellTaxBps > cfg.sellTaxBps) && newRecipient == address(0)) {
+        if ((newBuyTaxBps > 0 || newSellTaxBps > 0) && newRecipient == address(0)) {
             revert InvalidTaxRecipient();
         }
         cfg.buyTaxBps = newBuyTaxBps;

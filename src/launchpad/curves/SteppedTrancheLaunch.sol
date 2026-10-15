@@ -62,6 +62,13 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         external
     {
         if (launchState != LaunchState.Uninitialized || msg.sender != factory) revert AlreadyInitialized();
+        if (
+            _config.numTranches == 0 || _config.curveTokenAllocation == 0 || _config.graduationQuoteTarget == 0
+                || _config.basePriceQ96 == 0 || _config.antiSnipeSurchargeBps >= 10_000
+                || _config.surchargeToKingPotBps > 10_000
+        ) {
+            revert ZeroAmount();
+        }
 
         poolKey = _poolKey;
         poolId = _poolKey.toId();
@@ -115,25 +122,36 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
             : quoteAmountIn;
         uint256 quoteUsed = quoteAmountIn > maxGrossInput && maxGrossInput > 0 ? maxGrossInput : quoteAmountIn;
 
+        surcharge = Math.mulDiv(quoteUsed, surchargeBps, 10_000, Math.Rounding.Ceil);
+        uint256 netQuoteForTokens = quoteUsed - surcharge;
+
+        {
+            uint256 priceQ96 = currentMarginalPriceQ96();
+            uint256 remainingTokens = trancheConfig.curveTokenAllocation > curveTokensSold
+                ? trancheConfig.curveTokenAllocation - curveTokensSold
+                : 0;
+            tokensOut = Math.mulDiv(netQuoteForTokens, uint256(1) << 96, priceQ96, Math.Rounding.Floor);
+            if (tokensOut > remainingTokens) {
+                tokensOut = remainingTokens;
+                netQuoteForTokens = Math.mulDiv(tokensOut, priceQ96, uint256(1) << 96, Math.Rounding.Floor);
+                quoteUsed = surchargeBps < 10_000
+                    ? Math.mulDiv(netQuoteForTokens, 10_000, 10_000 - surchargeBps, Math.Rounding.Floor)
+                    : netQuoteForTokens;
+                surcharge = Math.mulDiv(quoteUsed, surchargeBps, 10_000, Math.Rounding.Ceil);
+                netQuoteForTokens = quoteUsed - surcharge;
+                tokensOut = Math.mulDiv(netQuoteForTokens, uint256(1) << 96, priceQ96, Math.Rounding.Floor);
+                if (tokensOut > remainingTokens) tokensOut = remainingTokens;
+            }
+        }
+        if (tokensOut < minTokensOut) {
+            revert SlippageExceeded(tokensOut, minTokensOut);
+        }
+
         if (quoteCurrency.isAddressZero()) {
             require(msg.value >= quoteUsed, "Insufficient ETH");
         } else {
             require(msg.value == 0, "Unexpected ETH");
             IERC20(Currency.unwrap(quoteCurrency)).safeTransferFrom(msg.sender, address(this), quoteUsed);
-        }
-
-        surcharge = Math.mulDiv(quoteUsed, surchargeBps, 10_000, Math.Rounding.Ceil);
-        uint256 netQuoteForTokens = quoteUsed - surcharge;
-
-        uint256 priceQ96 = currentMarginalPriceQ96();
-        tokensOut = Math.mulDiv(netQuoteForTokens, uint256(1) << 96, priceQ96, Math.Rounding.Floor);
-
-        uint256 remainingTokens = trancheConfig.curveTokenAllocation - curveTokensSold;
-        if (tokensOut > remainingTokens) {
-            tokensOut = remainingTokens;
-        }
-        if (tokensOut < minTokensOut) {
-            revert SlippageExceeded(tokensOut, minTokensOut);
         }
 
         realQuoteRaised += netQuoteForTokens;
@@ -173,27 +191,19 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         returns (uint256 quoteOut)
     {
         if (launchState != LaunchState.ActiveBonding) revert CurveNotActive();
-        if (tokenAmountIn == 0) revert ZeroAmount();
+        if (tokenAmountIn == 0 || tokenAmountIn > curveTokensSold || realQuoteRaised == 0) revert ZeroAmount();
         if (recipient == address(0)) recipient = msg.sender;
 
         IERC20(projectToken).safeTransferFrom(msg.sender, address(this), tokenAmountIn);
 
-        // Conservative redemption at base tranche price (or pro-rata realQuoteRaised) rounded down
-        uint256 baseRedemption =
-            Math.mulDiv(tokenAmountIn, uint256(trancheConfig.basePriceQ96), uint256(1) << 96, Math.Rounding.Floor);
-        uint256 proRataCap = curveTokensSold > 0
-            ? Math.mulDiv(realQuoteRaised, tokenAmountIn, curveTokensSold, Math.Rounding.Floor)
-            : 0;
-        quoteOut = baseRedemption < proRataCap ? baseRedemption : proRataCap;
-        if (quoteOut > realQuoteRaised) {
-            quoteOut = realQuoteRaised;
-        }
+        uint256 proRataCap = Math.mulDiv(realQuoteRaised, tokenAmountIn, curveTokensSold, Math.Rounding.Floor);
+        quoteOut = proRataCap > realQuoteRaised ? realQuoteRaised : proRataCap;
         if (quoteOut < minQuoteOut) {
             revert SlippageExceeded(quoteOut, minQuoteOut);
         }
 
         realQuoteRaised -= quoteOut;
-        curveTokensSold = curveTokensSold > tokenAmountIn ? curveTokensSold - tokenAmountIn : 0;
+        curveTokensSold -= tokenAmountIn;
 
         quoteCurrency.transfer(recipient, quoteOut);
 
@@ -207,24 +217,42 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
             Math.mulDiv(totalSurchargeCollected, trancheConfig.surchargeToKingPotBps, 10_000, Math.Rounding.Floor);
         uint256 extraLpQuote = totalSurchargeCollected - kingPotSeed;
         uint256 quoteToSeed = realQuoteRaised + extraLpQuote;
-        uint256 tokensToSeed = trancheConfig.lpTokenReserve;
 
-        uint256 ratioX192 = Math.mulDiv(tokensToSeed, uint256(1) << 192, quoteToSeed, Math.Rounding.Floor);
-        uint160 graduationSqrtPriceX96 = uint160(Math.sqrt(ratioX192));
-        if (graduationSqrtPriceX96 < TickMath.MIN_SQRT_PRICE) {
+        uint256 finalPriceQ96 = currentMarginalPriceQ96();
+        uint256 continuousLpTokens = Math.mulDiv(quoteToSeed, uint256(1) << 96, finalPriceQ96, Math.Rounding.Floor);
+        uint256 availableTokens = IERC20(projectToken).balanceOf(address(this));
+        if (continuousLpTokens > availableTokens) {
+            continuousLpTokens = availableTokens;
+        }
+        if (continuousLpTokens == 0) {
+            continuousLpTokens = trancheConfig.lpTokenReserve;
+        }
+        trancheConfig.lpTokenReserve = uint128(continuousLpTokens);
+        uint256 tokensToSeed = continuousLpTokens;
+
+        uint160 graduationSqrtPriceX96;
+        if (tokensToSeed <= type(uint64).max) {
+            uint256 ratioX192 = Math.mulDiv(tokensToSeed, uint256(1) << 192, quoteToSeed, Math.Rounding.Floor);
+            graduationSqrtPriceX96 = uint160(Math.sqrt(ratioX192));
+        } else {
+            uint256 ratioX128 = Math.mulDiv(tokensToSeed, uint256(1) << 128, quoteToSeed, Math.Rounding.Floor);
+            graduationSqrtPriceX96 = uint160(Math.sqrt(ratioX128) << 32);
+        }
+        if (graduationSqrtPriceX96 <= TickMath.MIN_SQRT_PRICE) {
             graduationSqrtPriceX96 = TickMath.MIN_SQRT_PRICE + 1;
         }
-        if (graduationSqrtPriceX96 > TickMath.MAX_SQRT_PRICE) {
+        if (graduationSqrtPriceX96 >= TickMath.MAX_SQRT_PRICE) {
             graduationSqrtPriceX96 = TickMath.MAX_SQRT_PRICE - 1;
         }
 
+        IHookRigOrchestrator hook = IHookRigOrchestrator(address(poolKey.hooks));
         poolManager.initialize(poolKey, graduationSqrtPriceX96);
-        hookOrchestrator.notifyPoolGraduated(poolId);
+        hook.notifyPoolGraduated(poolId);
 
         poolManager.unlock(abi.encode(quoteToSeed, tokensToSeed, kingPotSeed));
 
         if (kingPotSeed > 0) {
-            hookOrchestrator.seedKingPotFromLaunchCurve(poolId, poolKey.currency0, kingPotSeed);
+            hook.seedKingPotFromLaunchCurve(poolId, poolKey.currency0, kingPotSeed);
         }
 
         emit CurveGraduated(poolId, projectToken, quoteToSeed, tokensToSeed, graduationSqrtPriceX96);
@@ -256,7 +284,21 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
 
         if (kingPotSeed > 0) {
             poolKey.currency0.settle(poolManager, address(this), kingPotSeed, false);
-            poolManager.mint(address(hookOrchestrator), poolKey.currency0.toId(), kingPotSeed);
+            poolManager.mint(address(poolKey.hooks), poolKey.currency0.toId(), kingPotSeed);
+        }
+
+        uint256 remQuote = poolKey.currency0.isAddressZero()
+            ? address(this).balance
+            : IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(address(this));
+        uint256 remToken = IERC20(projectToken).balanceOf(address(this));
+        if (remQuote > 0 || remToken > 0) {
+            BalanceDelta donateDelta = poolManager.donate(poolKey, remQuote, remToken, "");
+            if (donateDelta.amount0() < 0) {
+                poolKey.currency0.settle(poolManager, address(this), uint256(uint128(-donateDelta.amount0())), false);
+            }
+            if (donateDelta.amount1() < 0) {
+                poolKey.currency1.settle(poolManager, address(this), uint256(uint128(-donateDelta.amount1())), false);
+            }
         }
 
         return "";
