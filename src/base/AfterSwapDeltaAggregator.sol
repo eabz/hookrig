@@ -155,8 +155,11 @@ abstract contract AfterSwapDeltaAggregator is
             }
         }
 
-        // 6. King of the Pool (pot fee on buys credited to jackpot pot)
-        if ((bitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0 && ctx.isBuy) {
+        // 6. King of the Pool (pot fee on Exact-In buys where unspecifiedCurrency == projectCurrency)
+        if (
+            (bitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0 && ctx.isBuy
+                && ctx.unspecifiedCurrency == ctx.projectCurrency
+        ) {
             uint16 potBps = _kingStates[poolId].potFeeOnBuyBps;
             if (potBps > 0) {
                 uint256 potCut = _boundedCut(grossAmount, potBps, totalCutAmount, maxAllowedTotalCut);
@@ -180,6 +183,8 @@ abstract contract AfterSwapDeltaAggregator is
             }
         }
 
+        uint128 activeLiquidity = StateLibrary.getLiquidity(manager, poolId);
+
         // 8. Auto Buyback & Floor Defense (Expansion #22)
         if ((bitmap & HookPermissionMasks.BIT_AUTO_BUYBACK) != 0) {
             uint16 bbBps = _autoBuybackStates[poolId].buybackFeeBps;
@@ -187,9 +192,15 @@ abstract contract AfterSwapDeltaAggregator is
                 uint256 bbCut = _boundedCut(grossAmount, bbBps, totalCutAmount, maxAllowedTotalCut);
                 if (bbCut > 0) {
                     totalCutAmount += bbCut;
-                    uint256 deployed = _processAutoBuyback(poolId, ctx.unspecifiedCurrency, bbCut, ctx.postSwapTick);
+                    uint256 deployed = _processAutoBuyback(
+                        poolId, ctx.unspecifiedCurrency, bbCut, ctx.postSwapTick, activeLiquidity > 0
+                    );
                     if (deployed > 0) {
-                        lpDonationAmount += bbCut;
+                        uint256 priorReserve = deployed - bbCut;
+                        if (priorReserve > 0) {
+                            manager.burn(address(this), ctx.unspecifiedCurrency.toId(), priorReserve);
+                        }
+                        lpDonationAmount += deployed;
                     } else {
                         manager.mint(address(this), ctx.unspecifiedCurrency.toId(), bbCut);
                     }
@@ -199,7 +210,6 @@ abstract contract AfterSwapDeltaAggregator is
 
         // Settle combined LP donations (`Arb recapture` + `LP rewards` + triggered `Auto buyback`) safely
         if (lpDonationAmount > 0) {
-            uint128 activeLiquidity = StateLibrary.getLiquidity(manager, poolId);
             if (activeLiquidity > 0) {
                 uint256 amount0 = ctx.unspecifiedCurrency == key.currency0 ? lpDonationAmount : 0;
                 uint256 amount1 = ctx.unspecifiedCurrency == key.currency1 ? lpDonationAmount : 0;

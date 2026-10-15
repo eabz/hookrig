@@ -49,9 +49,12 @@ abstract contract JITGuardBlock is IHookRigBlock {
     mapping(PoolId poolId => JITGuardLogic.JITConfig config) internal _jitConfigs;
     mapping(PoolId poolId => mapping(bytes32 positionKey => uint32 addedAtBlock)) internal _lpAddedBlock;
 
+    uint32 internal constant MAX_LP_HOLD_BLOCKS = 7200; // ~24h ceiling so LPs can never be permanently locked
+
     function _initJITGuard(PoolId poolId, uint32 minLPHoldBlocks, uint16 jitExitPenaltyBps) internal {
+        uint32 cappedHold = minLPHoldBlocks > MAX_LP_HOLD_BLOCKS ? MAX_LP_HOLD_BLOCKS : minLPHoldBlocks;
         _jitConfigs[poolId] =
-            JITGuardLogic.JITConfig({minLPHoldBlocks: minLPHoldBlocks, jitExitPenaltyBps: jitExitPenaltyBps});
+            JITGuardLogic.JITConfig({minLPHoldBlocks: cappedHold, jitExitPenaltyBps: jitExitPenaltyBps});
     }
 
     function _recordLPAddition(PoolId poolId, address lpOwner, ModifyLiquidityParams calldata params) internal {

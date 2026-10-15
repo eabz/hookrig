@@ -27,6 +27,8 @@ interface IHookRigOrchestrator is IHookRigBlock {
 
     function notifyPoolGraduated(PoolId poolId) external;
 
+    function seedKingPotFromLaunchCurve(PoolId poolId, Currency currency, uint256 amount) external;
+
     function withdrawClaim(PoolId poolId, Currency currency, uint256 amount, address to) external;
 
     function getPoolEnabledBlocks(PoolId poolId) external view returns (uint32);

@@ -94,6 +94,7 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         if (quoteCurrency.isAddressZero()) {
             require(msg.value >= quoteUsed, "Insufficient ETH");
         } else {
+            require(msg.value == 0, "Unexpected ETH");
             IERC20(Currency.unwrap(quoteCurrency)).safeTransferFrom(msg.sender, address(this), quoteUsed);
         }
 
@@ -208,7 +209,7 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         int24 tickLower = (TickMath.MIN_TICK / spacing) * spacing;
         int24 tickUpper = (TickMath.MAX_TICK / spacing) * spacing;
 
-        uint256 liquidityEstimate = Math.sqrt(quoteToSeed * tokensToSeed);
+        uint256 liquidityEstimate = (Math.sqrt(quoteToSeed * tokensToSeed) * 9999) / 10_000;
         (BalanceDelta callerDelta,) = poolManager.modifyLiquidity(
             poolKey,
             ModifyLiquidityParams({

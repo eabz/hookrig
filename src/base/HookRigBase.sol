@@ -7,6 +7,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -19,7 +20,13 @@ import {IHookRigOrchestrator} from "../interfaces/IHookRigOrchestrator.sol";
 ///         - Isolates all ERC-6909 claim balances by `PoolId`
 ///         - Resolves authenticated trader/LP addresses via Trusted Routers (`IMsgSender`) or `hookData`
 ///         - Guards launchpad pools against pre-initialization front-running
-abstract contract HookRigBase is BaseHook, Ownable2Step, ReentrancyGuardTransient, IHookRigOrchestrator {
+abstract contract HookRigBase is
+    BaseHook,
+    Ownable2Step,
+    ReentrancyGuardTransient,
+    IUnlockCallback,
+    IHookRigOrchestrator
+{
     using PoolIdLibrary for PoolKey;
     using CurrencySettler for Currency;
 
@@ -90,11 +97,21 @@ abstract contract HookRigBase is BaseHook, Ownable2Step, ReentrancyGuardTransien
         }
         poolClaims[poolId][currency][msg.sender] = available - amount;
 
-        // Burn ERC-6909 claim held by this hook and transfer underlying currency to `to`
-        poolManager.burn(address(this), currency.toId(), amount);
-        poolManager.take(currency, to, amount);
+        _payoutERC6909Claim(currency, to, amount);
 
         emit ClaimWithdrawn(poolId, currency, msg.sender, amount);
+    }
+
+    /// @notice Unlocks PoolManager to burn ERC-6909 claims held by this hook and transfer underlying currency to `to`.
+    function _payoutERC6909Claim(Currency currency, address to, uint256 amount) internal {
+        poolManager.unlock(abi.encode(currency, to, amount));
+    }
+
+    function unlockCallback(bytes calldata data) external onlyPoolManager returns (bytes memory) {
+        (Currency currency, address to, uint256 amount) = abi.decode(data, (Currency, address, uint256));
+        poolManager.burn(address(this), currency.toId(), amount);
+        poolManager.take(currency, to, amount);
+        return "";
     }
 
     function getPoolEnabledBlocks(PoolId poolId) external view override returns (uint32) {

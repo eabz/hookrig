@@ -9,6 +9,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
 library LimitOrdersLogic {
+    using PoolIdLibrary for PoolKey;
     using SafeERC20 for IERC20;
 
     uint256 internal constant MAX_TICK_FILLS_PER_SWAP = 16;
@@ -37,12 +38,15 @@ library LimitOrdersLogic {
         uint128 inputAmount
     );
     event LimitOrderCancelled(uint256 indexed orderId, PoolId indexed poolId, address indexed maker, uint128 amount);
+    event LimitOrderClaimed(uint256 indexed orderId, PoolId indexed poolId, address indexed maker, uint128 amount);
     event LimitOrderTickCrossed(PoolId indexed poolId, int24 indexed crossedTick, bool zeroForOne, uint128 bucketSize);
 
     error NotOrderMaker(address caller);
     error OrderAlreadyHandled(uint256 orderId);
     error BucketAlreadyFilled(uint256 orderId);
+    error BucketNotYetFilled(uint256 orderId);
     error InvalidOrderAmount();
+    error OrderPoolKeyMismatch();
 
     function placeOrder(
         mapping(uint256 => UserLimitOrder) storage orders,
@@ -83,6 +87,7 @@ library LimitOrdersLogic {
         UserLimitOrder storage order = orders[orderId];
         if (order.maker != msg.sender) revert NotOrderMaker(msg.sender);
         if (order.claimedOrCancelled) revert OrderAlreadyHandled(orderId);
+        if (PoolId.unwrap(key.toId()) != PoolId.unwrap(order.poolId)) revert OrderPoolKeyMismatch();
 
         LimitOrderBucket storage bucket = buckets[order.poolId][order.targetTick][order.zeroForOne];
         if (bucket.filled) revert BucketAlreadyFilled(orderId);
@@ -94,6 +99,30 @@ library LimitOrdersLogic {
         inputCurrency.transfer(msg.sender, order.inputAmount);
 
         emit LimitOrderCancelled(orderId, order.poolId, msg.sender, order.inputAmount);
+    }
+
+    function claimOrder(
+        mapping(uint256 => UserLimitOrder) storage orders,
+        mapping(PoolId => mapping(int24 => mapping(bool => LimitOrderBucket))) storage buckets,
+        PoolKey calldata key,
+        uint256 orderId
+    ) external {
+        UserLimitOrder storage order = orders[orderId];
+        if (order.maker != msg.sender) revert NotOrderMaker(msg.sender);
+        if (order.claimedOrCancelled) revert OrderAlreadyHandled(orderId);
+        if (PoolId.unwrap(key.toId()) != PoolId.unwrap(order.poolId)) revert OrderPoolKeyMismatch();
+
+        LimitOrderBucket storage bucket = buckets[order.poolId][order.targetTick][order.zeroForOne];
+        if (!bucket.filled) revert BucketNotYetFilled(orderId);
+
+        order.claimedOrCancelled = true;
+        bucket.totalInputAmount -= order.inputAmount;
+
+        // Guarantee anti-freeze liveness: return escrowed tokens so filled buckets never strand maker funds
+        Currency payoutCurrency = order.zeroForOne ? key.currency0 : key.currency1;
+        payoutCurrency.transfer(msg.sender, order.inputAmount);
+
+        emit LimitOrderClaimed(orderId, order.poolId, msg.sender, order.inputAmount);
     }
 
     function processCrossedTicks(
@@ -138,7 +167,7 @@ library LimitOrdersLogic {
 
 /// @title LimitOrdersBlock
 /// @notice Group 5 (Trading) — Block #15: Tick-indexed on-chain limit orders (`afterInitialize`, `afterSwap`).
-/// @dev Trust Level: Low (users can always cancel unfilled orders; bounded tick traversal per swap).
+/// @dev Trust Level: Low (users can always cancel unfilled orders or claim filled orders; bounded tick traversal per swap).
 abstract contract LimitOrdersBlock is IHookRigBlock {
     using PoolIdLibrary for PoolKey;
 
@@ -166,6 +195,11 @@ abstract contract LimitOrdersBlock is IHookRigBlock {
     /// @notice Guarantee liveness: makers can always cancel unfilled orders and recover escrowed tokens.
     function cancelLimitOrder(PoolKey calldata key, uint256 orderId) external {
         LimitOrdersLogic.cancelOrder(_limitOrders, _limitOrderBuckets, key, orderId);
+    }
+
+    /// @notice Guarantee liveness: makers can always claim/withdraw orders once their target tick has been crossed.
+    function claimLimitOrder(PoolKey calldata key, uint256 orderId) external {
+        LimitOrdersLogic.claimOrder(_limitOrders, _limitOrderBuckets, key, orderId);
     }
 
     function _processCrossedLimitOrderTicks(PoolId poolId, int24 tickSpacing, int24 postSwapTick) internal {

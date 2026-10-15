@@ -5,7 +5,7 @@
 **Composable Hook Building Blocks, Presets & Token Launchpad for Uniswap v4**
 
 [![CI](https://github.com/eabz/hookrig/actions/workflows/test.yml/badge.svg)](./.github/workflows/test.yml)
-[![Solidity](https://img.shields.io/badge/Solidity-0.8.30-363636?logo=solidity)](./foundry.toml)
+[![Solidity](https://img.shields.io/badge/Solidity-0.8.26-363636?logo=solidity)](./foundry.toml)
 [![EVM](https://img.shields.io/badge/EVM-Cancun%20(EIP--1153)-blue)](./foundry.toml)
 [![Uniswap v4](https://img.shields.io/badge/Uniswap-v4-FF007A?logo=uniswap)](https://github.com/Uniswap/v4-core)
 [![OpenZeppelin](https://img.shields.io/badge/OpenZeppelin-v5%20%2B%20uniswap--hooks-4E5EE4?logo=openzeppelin)](https://github.com/OpenZeppelin/uniswap-hooks)
@@ -20,7 +20,7 @@
 
 **HookRig** is a security-first, modular smart contract framework for **Uniswap v4** built on top of **OpenZeppelin's `uniswap-hooks` and `contracts` v5**.
 
-Compose custom pool behavior from **17 standardized building blocks**, deploy one of **12 production presets**, or launch new tokens through **3 native bonding/launch curves** that graduate directly into a HookRig-powered Uniswap v4 pool.
+Compose custom pool behavior from **22 standardized building blocks** (`17 core + 5 expansion`), deploy one of **12 production presets**, or launch new tokens through **3 native bonding/launch curves** that graduate directly into a HookRig-powered Uniswap v4 pool.
 
 ---
 
@@ -34,9 +34,9 @@ cd hookrig
 # 2. Build & check EIP-170 contract sizes
 forge build --sizes
 
-# 3. Check formatting & run tests
-forge fmt --check
-forge test -vvv
+# 3. Run unit, preset, launchpad & invariant tests + coverage
+forge test -vv
+forge coverage --report summary --ir-minimum
 ```
 
 ---
@@ -119,6 +119,7 @@ Launch tokens via [`LaunchpadFactory`](./src/launchpad/LaunchpadFactory.sol) wit
 | [**03. Hooks Execution Flow**](./docs/03-hooks-flow.md) | Callback sequence diagrams, `FeeAggregator`, and `AfterSwapDeltaAggregator` waterfall. |
 | [**04. Security Mechanics & Caveats**](./docs/04-security-mechanics-and-caveats.md) | Real-world v4 exploit defenses (Cork Protocol, Bunni V2), rounding laws, and hard caps. |
 | [**05. Token Launchpad Mechanics**](./docs/05-token-launch-mechanics.md) | Bonding math, `Create2` address sorting, and graduation security invariants. |
+| [**06. Attack Vectors & Code Fixes**](./docs/06-attack-vectors-and-fixes.md) | Complete catalog of all 14 attack vectors mapped to exact `src/` code fixes and `test/` regression tests. |
 
 ---
 

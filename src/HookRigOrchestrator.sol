@@ -415,18 +415,29 @@ contract HookRigOrchestrator is
 
     /// @notice Pull-based jackpot claim for finalized King of the Pool rounds.
     function claimKingPot(PoolId poolId, uint64 roundId, address to) external nonReentrant {
-        _claimKingPot(poolManager, poolId, roundId, to);
+        (Currency currency, uint256 reward) = _validateKingClaim(poolId, roundId);
+        _payoutERC6909Claim(currency, to, reward);
     }
 
-    /// @notice Allows an authorized LaunchCurve to seed initial sniper surcharges into Round #1 King of the Pool pot.
-    function seedKingPotFromLaunchCurve(PoolId poolId, Currency currency, uint256 amount) external {
+    /// @notice Allows an authorized LaunchCurve to seed initial sniper surcharges into Round #1 King of the Pool pot
+    ///         (or into `poolAdmin` ERC-6909 claims if the pot already holds a different currency).
+    function seedKingPotFromLaunchCurve(PoolId poolId, Currency currency, uint256 amount) external override {
         PoolRuntimeMeta storage meta = _poolMeta[poolId];
         if (msg.sender != meta.authorizedCurve && msg.sender != launchpadFactory) {
             revert OnlyAuthorizedCurve(msg.sender);
         }
         if (amount == 0) return;
-        _kingStates[poolId].potCurrency = currency;
-        _kingStates[poolId].currentPotAmount += amount;
+        Currency existing = _kingStates[poolId].potCurrency;
+        if (
+            (meta.enabledBlocksBitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0
+                && (_kingStates[poolId].currentPotAmount == 0 || existing == currency)
+        ) {
+            _kingStates[poolId].potCurrency = currency;
+            _kingStates[poolId].currentPotAmount += amount;
+        } else {
+            address admin = meta.poolAdmin != address(0) ? meta.poolAdmin : owner();
+            poolClaims[poolId][currency][admin] += amount;
+        }
     }
 
     function _creditClaimInternal(PoolId poolId, Currency currency, address beneficiary, uint256 amount)

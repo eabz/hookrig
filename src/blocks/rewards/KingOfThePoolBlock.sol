@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
 library KingOfThePoolLogic {
@@ -109,25 +108,20 @@ library KingOfThePoolLogic {
         }
     }
 
-    function claimPot(
-        IPoolManager poolManager,
+    function validateAndMarkClaimed(
         mapping(PoolId => KingRoundState) storage states,
         mapping(PoolId => mapping(uint64 => SettledKingRound)) storage settledRounds,
         PoolId poolId,
-        uint64 roundId,
-        address to
-    ) external {
+        uint64 roundId
+    ) external returns (Currency currency, uint256 reward) {
         finalizeExpired(states, settledRounds, poolId);
         SettledKingRound storage round = settledRounds[poolId][roundId];
         if (round.amount == 0 || round.claimed) revert RoundNotClaimable(poolId, roundId);
         if (msg.sender != round.winner) revert NotRoundWinner(msg.sender, round.winner);
 
         round.claimed = true;
-        uint256 reward = round.amount;
-        Currency currency = round.currency;
-
-        poolManager.burn(address(this), currency.toId(), reward);
-        poolManager.take(currency, to, reward);
+        reward = round.amount;
+        currency = round.currency;
 
         emit KingPotClaimed(poolId, roundId, msg.sender, reward);
     }
@@ -180,8 +174,8 @@ abstract contract KingOfThePoolBlock is IHookRigBlock {
         KingOfThePoolLogic.finalizeExpired(_kingStates, _settledKingRounds, poolId);
     }
 
-    function _claimKingPot(IPoolManager manager, PoolId poolId, uint64 roundId, address to) internal {
-        KingOfThePoolLogic.claimPot(manager, _kingStates, _settledKingRounds, poolId, roundId, to);
+    function _validateKingClaim(PoolId poolId, uint64 roundId) internal returns (Currency currency, uint256 reward) {
+        return KingOfThePoolLogic.validateAndMarkClaimed(_kingStates, _settledKingRounds, poolId, roundId);
     }
 
     function getCurrentKing(PoolId poolId)

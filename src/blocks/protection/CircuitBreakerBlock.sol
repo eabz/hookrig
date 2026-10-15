@@ -41,10 +41,14 @@ library CircuitBreakerLogic {
 abstract contract CircuitBreakerBlock is IHookRigBlock {
     mapping(PoolId poolId => CircuitBreakerLogic.CircuitBreakerState state) internal _circuitBreakers;
 
+    uint32 internal constant MAX_WINDOW_SECONDS = 86_400; // Max 24h rolling window so pools auto-recover
+
     function _initCircuitBreaker(PoolId poolId, CircuitBreakerParams calldata params) internal {
+        uint32 win = params.windowSeconds > 0 ? params.windowSeconds : 300;
+        if (win > MAX_WINDOW_SECONDS) win = MAX_WINDOW_SECONDS;
         _circuitBreakers[poolId] = CircuitBreakerLogic.CircuitBreakerState({
             maxWindowTickDeviation: params.maxWindowTickDeviation,
-            windowSeconds: params.windowSeconds > 0 ? params.windowSeconds : 300,
+            windowSeconds: win,
             anchorTick: 0,
             windowStartTimestamp: 0
         });

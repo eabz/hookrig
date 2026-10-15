@@ -20,6 +20,7 @@ import {IHookRigOrchestrator} from "../../interfaces/IHookRigOrchestrator.sol";
 /// @title SteppedTrancheLaunch
 /// @notice Curve Model #2: Anti-bundle stepped tranche curve with active `WalletCap` and `AntiSnipe` surcharges
 ///         during bonding. Surcharges seed extra graduation LP depth and Round #1 `KingOfThePool` jackpot.
+///         Includes pre-graduation `sell()` so stalled launches can never freeze buyer capital.
 contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTransient {
     using PoolIdLibrary for PoolKey;
     using SafeERC20 for IERC20;
@@ -44,6 +45,7 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
 
     error AlreadyInitialized();
     error CurveNotActive();
+    error ZeroAmount();
     error SlippageExceeded(uint256 actual, uint256 minimumRequired);
     error WalletCapExceededOnTranche(address buyer, uint256 newBalance, uint256 maxAllowed);
     error OnlyPoolManagerUnlock();
@@ -101,17 +103,27 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         returns (uint256 tokensOut, uint256 surcharge)
     {
         if (launchState != LaunchState.ActiveBonding) revert CurveNotActive();
+        if (quoteAmountIn == 0) revert ZeroAmount();
         if (recipient == address(0)) recipient = msg.sender;
 
+        uint16 surchargeBps = currentAntiSnipeSurchargeBps();
+        uint256 remainingQuoteToTarget = trancheConfig.graduationQuoteTarget > realQuoteRaised
+            ? trancheConfig.graduationQuoteTarget - realQuoteRaised
+            : 0;
+        uint256 maxGrossInput = surchargeBps < 10_000
+            ? Math.mulDiv(remainingQuoteToTarget, 10_000, 10_000 - surchargeBps, Math.Rounding.Ceil)
+            : quoteAmountIn;
+        uint256 quoteUsed = quoteAmountIn > maxGrossInput && maxGrossInput > 0 ? maxGrossInput : quoteAmountIn;
+
         if (quoteCurrency.isAddressZero()) {
-            require(msg.value >= quoteAmountIn, "Insufficient ETH");
+            require(msg.value >= quoteUsed, "Insufficient ETH");
         } else {
-            IERC20(Currency.unwrap(quoteCurrency)).safeTransferFrom(msg.sender, address(this), quoteAmountIn);
+            require(msg.value == 0, "Unexpected ETH");
+            IERC20(Currency.unwrap(quoteCurrency)).safeTransferFrom(msg.sender, address(this), quoteUsed);
         }
 
-        uint16 surchargeBps = currentAntiSnipeSurchargeBps();
-        surcharge = Math.mulDiv(quoteAmountIn, surchargeBps, 10_000, Math.Rounding.Ceil);
-        uint256 netQuoteForTokens = quoteAmountIn - surcharge;
+        surcharge = Math.mulDiv(quoteUsed, surchargeBps, 10_000, Math.Rounding.Ceil);
+        uint256 netQuoteForTokens = quoteUsed - surcharge;
 
         uint256 priceQ96 = currentMarginalPriceQ96();
         tokensOut = Math.mulDiv(netQuoteForTokens, uint256(1) << 96, priceQ96, Math.Rounding.Floor);
@@ -139,7 +151,11 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
 
         IERC20(projectToken).safeTransfer(recipient, tokensOut);
 
-        emit CurveBuy(recipient, quoteAmountIn, tokensOut, surcharge, realQuoteRaised);
+        if (quoteCurrency.isAddressZero() && msg.value > quoteUsed) {
+            quoteCurrency.transfer(msg.sender, msg.value - quoteUsed);
+        }
+
+        emit CurveBuy(recipient, quoteUsed, tokensOut, surcharge, realQuoteRaised);
 
         if (
             realQuoteRaised >= trancheConfig.graduationQuoteTarget
@@ -147,6 +163,41 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         ) {
             _graduateToV4();
         }
+    }
+
+    /// @notice Anti-freeze guarantee: allows buyers to sell tokens back into the stepped curve prior to graduation
+    ///         so capital is never permanently locked if a launch stalls before reaching `graduationQuoteTarget`.
+    function sell(uint256 tokenAmountIn, uint256 minQuoteOut, address recipient)
+        external
+        nonReentrant
+        returns (uint256 quoteOut)
+    {
+        if (launchState != LaunchState.ActiveBonding) revert CurveNotActive();
+        if (tokenAmountIn == 0) revert ZeroAmount();
+        if (recipient == address(0)) recipient = msg.sender;
+
+        IERC20(projectToken).safeTransferFrom(msg.sender, address(this), tokenAmountIn);
+
+        // Conservative redemption at base tranche price (or pro-rata realQuoteRaised) rounded down
+        uint256 baseRedemption =
+            Math.mulDiv(tokenAmountIn, uint256(trancheConfig.basePriceQ96), uint256(1) << 96, Math.Rounding.Floor);
+        uint256 proRataCap = curveTokensSold > 0
+            ? Math.mulDiv(realQuoteRaised, tokenAmountIn, curveTokensSold, Math.Rounding.Floor)
+            : 0;
+        quoteOut = baseRedemption < proRataCap ? baseRedemption : proRataCap;
+        if (quoteOut > realQuoteRaised) {
+            quoteOut = realQuoteRaised;
+        }
+        if (quoteOut < minQuoteOut) {
+            revert SlippageExceeded(quoteOut, minQuoteOut);
+        }
+
+        realQuoteRaised -= quoteOut;
+        curveTokensSold = curveTokensSold > tokenAmountIn ? curveTokensSold - tokenAmountIn : 0;
+
+        quoteCurrency.transfer(recipient, quoteOut);
+
+        emit CurveSell(msg.sender, tokenAmountIn, quoteOut, realQuoteRaised);
     }
 
     function _graduateToV4() internal {
@@ -172,6 +223,10 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
 
         poolManager.unlock(abi.encode(quoteToSeed, tokensToSeed, kingPotSeed));
 
+        if (kingPotSeed > 0) {
+            hookOrchestrator.seedKingPotFromLaunchCurve(poolId, poolKey.currency0, kingPotSeed);
+        }
+
         emit CurveGraduated(poolId, projectToken, quoteToSeed, tokensToSeed, graduationSqrtPriceX96);
     }
 
@@ -183,7 +238,7 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         int24 tickLower = (TickMath.MIN_TICK / spacing) * spacing;
         int24 tickUpper = (TickMath.MAX_TICK / spacing) * spacing;
 
-        uint256 liquidityEstimate = Math.sqrt(quoteToSeed * tokensToSeed);
+        uint256 liquidityEstimate = (Math.sqrt(quoteToSeed * tokensToSeed) * 9999) / 10_000;
         (BalanceDelta callerDelta,) = poolManager.modifyLiquidity(
             poolKey,
             ModifyLiquidityParams({

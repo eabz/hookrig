@@ -108,12 +108,17 @@ Every block in `hookrig` is assigned an explicit **Trust Level** (`Low` vs. `Med
 | **Limit orders** | Low | Fully permissionless | Users can always cancel unfilled orders (`cancelOrder`) regardless of pool state. |
 | **TWAMM** | Low | Fully permissionless | Bounded iteration / closed-form math execution ($O(1)$ between order expiries) so swaps never run out of gas. |
 | **Oracle** | Low | Fully permissionless | Truncated max tick delta per block to resist flash-loan TWAP manipulation. |
+| **JIT Guard** *(Expansion #18)* | Low | Immutable cooldown / early-exit penalty | Prevents same-block `addLiquidity -> donate -> removeLiquidity` MEV dilution; early-exit penalty is donated to remaining LPs. |
+| **Circuit Breaker** *(Expansion #19)* | Low | Immutable rolling tick band & window | Purely algorithmic rolling price-band guard; auto-resets after `windowSeconds` so pools cannot be permanently frozen. |
+| **Referral Split** *(Expansion #20)* | Low | Immutable bps cap (`<= 300 bps`) | First-touch referrer binding with strict anti-self-referral check (`referrer != trader`) and pull-based ERC-6909 claims. |
+| **Vesting Sell Cap** *(Expansion #21)* | Low | Immutable daily epoch % cap | Enforces anti-honeypot floor (`maxDailySellBps >= 50` / `0.50%` per day) so selling can never be completely disabled. |
+| **Auto Buyback** *(Expansion #22)* | Medium | Immutable bps cap (`<= 500 bps`) & floor tick | Accumulates swap fee slice inside pool-isolated reserve and deploys via `donate()` when spot tick drops below `triggerFloorTick`. |
 
 ---
 
 ## 5. Verification & Testing Standards (Foundry + Halmos + Slither)
 
-Before any `hookrig` block, preset, or launchpad curve is considered production-ready, it must pass five automated verification suites:
+Before any `hookrig` block, preset, or launchpad curve is considered production-ready, it must pass five automated verification suites (see [**06. Attack Vectors, Mitigations & Code-Level Fixes**](./06-attack-vectors-and-fixes.md) for the complete code-level mapping):
 
 1. **Permission Bitmap Invariant Test**: Automated check that `Hooks.Permissions` matches the deployed/mined 14-bit address flags across all 12 presets and orchestrator masks.
 2. **Delta Conservation Invariant Campaign**: Stateful Foundry invariant fuzzing proving that across arbitrary sequences of `swap` (exact-in & exact-out), `modifyLiquidity`, `donate`, and `claim`, `PoolManager` + Hook ERC-6909 claims + ERC-20 balances remain strictly solvent (`sum(claims) <= actual_reserves`).
