@@ -54,6 +54,7 @@ contract HoodiSwapRouter is IUnlockCallback {
         payable
         returns (BalanceDelta delta)
     {
+        uint256 ethBefore = address(this).balance - msg.value;
         _currentSender = msg.sender;
         delta = abi.decode(
             manager.unlock(
@@ -62,8 +63,9 @@ contract HoodiSwapRouter is IUnlockCallback {
             (BalanceDelta)
         );
         _currentSender = address(0);
-        if (msg.value > 0 && address(this).balance > 0) {
-            (bool ok,) = msg.sender.call{value: address(this).balance}("");
+        uint256 refund = address(this).balance > ethBefore ? address(this).balance - ethBefore : 0;
+        if (msg.value > 0 && refund > 0) {
+            (bool ok,) = msg.sender.call{value: refund}("");
             require(ok, "ETH refund failed");
         }
     }

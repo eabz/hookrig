@@ -44,7 +44,7 @@ library WalletCapLogic {
         Currency projectCurrency,
         address recipient,
         uint256 netProjectTokensBought
-    ) external {
+    ) public {
         WalletCapState storage state = states[poolId];
         uint16 maxBps = state.maxWalletBps;
         if (maxBps == 0 || maxBps >= 10_000) return;
@@ -70,6 +70,32 @@ library WalletCapLogic {
         }
         TransientContext.setWalletCapExpectedBalance(poolId, recipient, postBalance);
     }
+
+    function enforceAfterSwap(
+        mapping(PoolId => WalletCapState) storage states,
+        PoolId poolId,
+        Currency projectCurrency,
+        address trader,
+        bool isBuy,
+        bool isExactInput,
+        uint256 grossUnspecifiedAmount,
+        uint256 settledSpecifiedAmount,
+        uint256 totalCutAmount
+    ) external {
+        if (isBuy) {
+            uint256 netTokensToBuyer = 0;
+            if (isExactInput && grossUnspecifiedAmount > totalCutAmount) {
+                netTokensToBuyer = grossUnspecifiedAmount - totalCutAmount;
+            } else if (!isExactInput) {
+                netTokensToBuyer = settledSpecifiedAmount;
+            }
+            enforceAfterBuy(states, poolId, projectCurrency, trader, netTokensToBuyer);
+        } else {
+            uint256 sold = isExactInput ? settledSpecifiedAmount : (grossUnspecifiedAmount + totalCutAmount);
+            uint256 prevExpected = TransientContext.getWalletCapExpectedBalance(poolId, trader);
+            TransientContext.setWalletCapExpectedBalance(poolId, trader, prevExpected > sold ? prevExpected - sold : 0);
+        }
+    }
 }
 
 /// @title WalletCapBlock
@@ -89,12 +115,26 @@ abstract contract WalletCapBlock is IHookRigBlock {
         }
     }
 
-    function _enforceWalletCapAfterBuy(
+    function _enforceWalletCapAfterSwap(
         PoolId poolId,
         Currency projectCurrency,
-        address recipient,
-        uint256 netProjectTokensBought
+        address trader,
+        bool isBuy,
+        bool isExactInput,
+        uint256 grossUnspecifiedAmount,
+        uint256 settledSpecifiedAmount,
+        uint256 totalCutAmount
     ) internal {
-        WalletCapLogic.enforceAfterBuy(_walletCapStates, poolId, projectCurrency, recipient, netProjectTokensBought);
+        WalletCapLogic.enforceAfterSwap(
+            _walletCapStates,
+            poolId,
+            projectCurrency,
+            trader,
+            isBuy,
+            isExactInput,
+            grossUnspecifiedAmount,
+            settledSpecifiedAmount,
+            totalCutAmount
+        );
     }
 }

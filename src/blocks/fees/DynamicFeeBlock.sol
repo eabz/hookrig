@@ -2,8 +2,16 @@
 pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
+import {HookPermissionMasks} from "../../libraries/HookPermissionMasks.sol";
+import {ManagedFeeLogic} from "./ManagedFeeBlock.sol";
+import {MarketHoursFeeLogic} from "./MarketHoursFeeBlock.sol";
+import {AntiSnipeLogic} from "../protection/AntiSnipeBlock.sol";
+import {MEVProtectionLogic} from "../protection/MEVProtectionBlock.sol";
+import {JITGuardLogic} from "../protection/JITGuardBlock.sol";
+import {ArbRecaptureLogic} from "../protection/ArbRecaptureBlock.sol";
 
 library DynamicFeeLogic {
     uint24 internal constant MAX_DYNAMIC_FEE = 50_000; // 5.00%
@@ -24,7 +32,7 @@ library DynamicFeeLogic {
         mapping(PoolId => DynamicFeeState) storage states,
         PoolId poolId,
         IHookRigBlock.DynamicFeeParams calldata params
-    ) external {
+    ) public {
         if (params.baseFee > params.maxFee || params.maxFee > MAX_DYNAMIC_FEE) {
             revert InvalidDynamicFeeBounds(params.baseFee, params.maxFee);
         }
@@ -37,8 +45,41 @@ library DynamicFeeLogic {
         st.volatilityTickThreshold = params.volatilityTickThreshold > 0 ? params.volatilityTickThreshold : int24(50);
     }
 
+    function initFeeAndProtectionBlocks(
+        mapping(PoolId => DynamicFeeState) storage dynamicFeeStates,
+        mapping(PoolId => ManagedFeeLogic.ManagedFeeState) storage managedFeeStates,
+        mapping(PoolId => IHookRigBlock.MarketHoursFeeParams) storage marketHoursConfigs,
+        mapping(PoolId => AntiSnipeLogic.AntiSnipeState) storage antiSnipeStates,
+        mapping(PoolId => MEVProtectionLogic.MEVProtectionState) storage mevStates,
+        mapping(PoolId => JITGuardLogic.JITConfig) storage jitConfigs,
+        mapping(PoolId => ArbRecaptureLogic.ArbRecaptureState) storage arbStates,
+        PoolId poolId,
+        IHookRigBlock.PoolStackConfig calldata config,
+        uint32 bitmap,
+        address admin
+    ) external {
+        if ((bitmap & HookPermissionMasks.BIT_DYNAMIC_FEE) != 0) {
+            stage(dynamicFeeStates, poolId, config.dynamicFee);
+        }
+        if ((bitmap & HookPermissionMasks.BIT_MANAGED_FEE) != 0) {
+            ManagedFeeLogic.stage(managedFeeStates, poolId, config.managedFee, admin);
+        }
+        if ((bitmap & HookPermissionMasks.BIT_MARKET_HOURS_FEE) != 0) {
+            MarketHoursFeeLogic.init(marketHoursConfigs, poolId, config.marketHoursFee);
+        }
+        if ((bitmap & HookPermissionMasks.BIT_ANTI_SNIPE) != 0) {
+            AntiSnipeLogic.init(antiSnipeStates, poolId, config.antiSnipe);
+        }
+        if ((bitmap & (HookPermissionMasks.BIT_MEV_PROTECTION | HookPermissionMasks.BIT_JIT_GUARD)) != 0) {
+            MEVProtectionLogic.init(mevStates, jitConfigs, poolId, config.mevProtection);
+        }
+        if ((bitmap & HookPermissionMasks.BIT_ARB_RECAPTURE) != 0) {
+            ArbRecaptureLogic.stage(arbStates, poolId, config.arbRecapture);
+        }
+    }
+
     function compute(mapping(PoolId => DynamicFeeState) storage states, PoolId poolId, int24 currentTick)
-        external
+        public
         returns (uint24 fee)
     {
         DynamicFeeState storage state = states[poolId];
@@ -55,6 +96,7 @@ library DynamicFeeLogic {
             state.lastUpdateBlock = uint32(block.number);
         } else if (absDelta > state.rollingVolatilityTicks) {
             state.rollingVolatilityTicks = (state.rollingVolatilityTicks * 3 + absDelta) / 4;
+            state.lastObservedTick = currentTick;
         }
 
         uint24 threshold = uint24(state.volatilityTickThreshold);
@@ -69,6 +111,48 @@ library DynamicFeeLogic {
         uint256 feeRange = state.maxFee - state.baseFee;
         uint256 surcharge = Math.mulDiv(feeRange, state.rollingVolatilityTicks, threshold, Math.Rounding.Floor);
         fee = state.baseFee + uint24(surcharge);
+    }
+
+    function resolveBeforeSwapFee(
+        mapping(PoolId => DynamicFeeState) storage dynamicFeeStates,
+        mapping(PoolId => ManagedFeeLogic.ManagedFeeState) storage managedFeeStates,
+        mapping(PoolId => IHookRigBlock.MarketHoursFeeParams) storage marketHoursConfigs,
+        mapping(PoolId => AntiSnipeLogic.AntiSnipeState) storage antiSnipeStates,
+        PoolId poolId,
+        uint32 bitmap,
+        int24 currentTick
+    ) external returns (uint24 lpFeeOverride) {
+        if ((bitmap & HookPermissionMasks.FEE_BLOCKS_MASK) == 0) {
+            return 0;
+        }
+
+        uint24 resolvedFee = 0;
+
+        if ((bitmap & HookPermissionMasks.BIT_DYNAMIC_FEE) != 0) {
+            uint24 dynFee = compute(dynamicFeeStates, poolId, currentTick);
+            if (dynFee > resolvedFee) resolvedFee = dynFee;
+        }
+
+        if ((bitmap & HookPermissionMasks.BIT_MANAGED_FEE) != 0) {
+            uint24 mgdFee = managedFeeStates[poolId].currentFee;
+            if (mgdFee > resolvedFee) resolvedFee = mgdFee;
+        }
+
+        if ((bitmap & HookPermissionMasks.BIT_MARKET_HOURS_FEE) != 0) {
+            uint24 mktFee = MarketHoursFeeLogic.computeFee(marketHoursConfigs, poolId);
+            if (mktFee > resolvedFee) resolvedFee = mktFee;
+        }
+
+        if ((bitmap & HookPermissionMasks.BIT_ANTI_SNIPE) != 0) {
+            uint24 snipeFee = AntiSnipeLogic.computeFee(antiSnipeStates, poolId);
+            if (snipeFee > resolvedFee) resolvedFee = snipeFee;
+        }
+
+        if (resolvedFee > LPFeeLibrary.MAX_LP_FEE) {
+            resolvedFee = LPFeeLibrary.MAX_LP_FEE;
+        }
+
+        return resolvedFee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
     }
 }
 

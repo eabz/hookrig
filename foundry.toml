@@ -11,6 +11,8 @@ optimizer_runs = 1
 via_ir = false
 bytecode_hash = "none"
 ffi = false
+ignored_error_codes = [1699, 2394]
+ignored_warnings_from = ["test", "script"]
 
 remappings = [
     "@uniswap/v4-core/=lib/v4-core/",
@@ -19,6 +21,9 @@ remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "forge-std/=lib/forge-std/src/"
 ]
+
+[lint]
+lint_on_build = false
 
 [fuzz]
 runs = 1000

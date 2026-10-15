@@ -4,6 +4,11 @@ pragma solidity ^0.8.26;
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
+import {IHookRigOrchestrator} from "../../interfaces/IHookRigOrchestrator.sol";
+import {HookRigBase} from "../../base/HookRigBase.sol";
+import {HookPermissionMasks} from "../../libraries/HookPermissionMasks.sol";
+import {WalletCapLogic} from "../token-rules/WalletCapBlock.sol";
+import {KingOfThePoolLogic} from "../rewards/KingOfThePoolBlock.sol";
 
 library AntiSnipeLogic {
     uint24 internal constant MAX_ANTI_SNIPE_LAUNCH_FEE = 800_000; // 80.00%
@@ -59,6 +64,39 @@ library AntiSnipeLogic {
         uint256 reduction = Math.mulDiv(feeDiff, elapsed, decayBlocks, Math.Rounding.Floor);
         return uint24(launchFee - reduction);
     }
+
+    function resetGraduationClocks(
+        mapping(PoolId => HookRigBase.PoolRuntimeMeta) storage poolMeta,
+        mapping(PoolId => AntiSnipeState) storage antiSnipeStates,
+        mapping(PoolId => WalletCapLogic.WalletCapState) storage walletCapStates,
+        mapping(PoolId => KingOfThePoolLogic.KingRoundState) storage kingStates,
+        PoolId poolId,
+        address launchpadFactory,
+        bool isExplicitGraduationCall
+    ) external {
+        HookRigBase.PoolRuntimeMeta storage meta = poolMeta[poolId];
+        if (isExplicitGraduationCall) {
+            if (msg.sender != meta.authorizedCurve && msg.sender != launchpadFactory) {
+                revert HookRigBase.OnlyAuthorizedCurve(msg.sender);
+            }
+            if (meta.launchpadGraduated) {
+                revert IHookRigOrchestrator.PoolAlreadyGraduated(poolId);
+            }
+            meta.launchpadGraduated = true;
+        } else if (meta.isLaunchpadPool) {
+            return;
+        }
+        uint32 bitmap = meta.enabledBlocksBitmap;
+        if ((bitmap & HookPermissionMasks.BIT_ANTI_SNIPE) != 0 && antiSnipeStates[poolId].launchFee > 0) {
+            antiSnipeStates[poolId].startBlock = uint32(block.number);
+        }
+        if ((bitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0 && walletCapStates[poolId].maxWalletBps > 0) {
+            walletCapStates[poolId].startBlock = uint32(block.number);
+        }
+        if ((bitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0 && kingStates[poolId].roundDurationSeconds > 0) {
+            kingStates[poolId].roundDeadline = uint64(block.timestamp + kingStates[poolId].roundDurationSeconds);
+        }
+    }
 }
 
 /// @title AntiSnipeBlock
@@ -69,14 +107,6 @@ abstract contract AntiSnipeBlock is IHookRigBlock {
 
     function _initAntiSnipe(PoolId poolId, AntiSnipeParams calldata params) internal {
         AntiSnipeLogic.init(_antiSnipeStates, poolId, params);
-    }
-
-    /// @notice Resets the startBlock to `block.number` when a bonding curve token graduates to Uniswap v4.
-    function _resetAntiSnipeGraduationClock(PoolId poolId) internal {
-        AntiSnipeLogic.AntiSnipeState storage state = _antiSnipeStates[poolId];
-        if (state.launchFee > 0) {
-            state.startBlock = uint32(block.number);
-        }
     }
 
     function _computeAntiSnipeFee(PoolId poolId) internal view returns (uint24) {

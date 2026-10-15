@@ -203,6 +203,9 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         if (tokensToSeed <= type(uint64).max) {
             uint256 ratioX192 = Math.mulDiv(tokensToSeed, uint256(1) << 192, quoteToSeed, Math.Rounding.Floor);
             graduationSqrtPriceX96 = uint160(Math.sqrt(ratioX192));
+        } else if (tokensToSeed <= type(uint96).max) {
+            uint256 ratioX160 = Math.mulDiv(tokensToSeed, uint256(1) << 160, quoteToSeed, Math.Rounding.Floor);
+            graduationSqrtPriceX96 = uint160(Math.sqrt(ratioX160) << 16);
         } else {
             uint256 ratioX128 = Math.mulDiv(tokensToSeed, uint256(1) << 128, quoteToSeed, Math.Rounding.Floor);
             graduationSqrtPriceX96 = uint160(Math.sqrt(ratioX128) << 32);

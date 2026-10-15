@@ -6,7 +6,22 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
 library SwapRewardsLogic {
+    uint128 internal constant MAX_POINTS_PER_UNIT_VOLUME = 1e27;
+
     event SwapPointsAccrued(PoolId indexed poolId, address indexed trader, uint256 pointsAdded, uint256 newTotal);
+
+    error SwapRewardPointsRateTooHigh(uint128 requestedRate);
+
+    function init(
+        mapping(PoolId => IHookRigBlock.SwapRewardsParams) storage configs,
+        PoolId poolId,
+        IHookRigBlock.SwapRewardsParams calldata params
+    ) external {
+        if (params.pointsPerUnitVolume > MAX_POINTS_PER_UNIT_VOLUME) {
+            revert SwapRewardPointsRateTooHigh(params.pointsPerUnitVolume);
+        }
+        configs[poolId] = params;
+    }
 
     function accrue(
         mapping(PoolId => IHookRigBlock.SwapRewardsParams) storage configs,
@@ -43,10 +58,7 @@ abstract contract SwapRewardsBlock is IHookRigBlock {
     error SwapRewardPointsRateTooHigh(uint128 requestedRate);
 
     function _initSwapRewards(PoolId poolId, SwapRewardsParams calldata params) internal {
-        if (params.pointsPerUnitVolume > MAX_POINTS_PER_UNIT_VOLUME) {
-            revert SwapRewardPointsRateTooHigh(params.pointsPerUnitVolume);
-        }
-        _swapRewardsConfigs[poolId] = params;
+        SwapRewardsLogic.init(_swapRewardsConfigs, poolId, params);
     }
 
     function _accrueSwapRewards(PoolId poolId, address trader, uint256 volumeAmount) internal {

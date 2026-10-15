@@ -19,15 +19,19 @@ import {TransientContext} from "./libraries/TransientContext.sol";
 import {HookRigBase} from "./base/HookRigBase.sol";
 import {FeeAggregator} from "./base/FeeAggregator.sol";
 import {AfterSwapDeltaAggregator} from "./base/AfterSwapDeltaAggregator.sol";
+import {DynamicFeeLogic} from "./blocks/fees/DynamicFeeBlock.sol";
 import {MEVProtectionBlock} from "./blocks/protection/MEVProtectionBlock.sol";
-import {AccessControlBlock} from "./blocks/protection/AccessControlBlock.sol";
+import {AccessControlBlock, AccessControlLogic} from "./blocks/protection/AccessControlBlock.sol";
+import {AntiSnipeLogic} from "./blocks/protection/AntiSnipeBlock.sol";
 import {CircuitBreakerBlock} from "./blocks/protection/CircuitBreakerBlock.sol";
+import {BuySellTaxLogic} from "./blocks/token-rules/BuySellTaxBlock.sol";
 import {WalletCapBlock} from "./blocks/token-rules/WalletCapBlock.sol";
 import {VestingSellCapBlock} from "./blocks/token-rules/VestingSellCapBlock.sol";
 import {SwapRewardsBlock} from "./blocks/rewards/SwapRewardsBlock.sol";
+import {KingOfThePoolLogic} from "./blocks/rewards/KingOfThePoolBlock.sol";
 import {LimitOrdersBlock} from "./blocks/trading/LimitOrdersBlock.sol";
 import {TWAMMBlock} from "./blocks/trading/TWAMMBlock.sol";
-import {OracleBlock} from "./blocks/trading/OracleBlock.sol";
+import {OracleBlock, OracleLogic} from "./blocks/trading/OracleBlock.sol";
 
 /// @title HookRigOrchestrator
 /// @notice Composable Uniswap v4 Hook Orchestrator uniting all 17 core blocks, 5 expansion blocks, and 12 presets.
@@ -77,12 +81,12 @@ contract HookRigOrchestrator is
 
     /// @notice Exposes Tier 3 bitmap compatibility check on the orchestrator.
     function isValidTier3Bitmap(uint32 bitmap) public pure override returns (bool) {
-        return HookPermissionMasks.isValidTier3Bitmap(bitmap);
+        return AccessControlLogic.checkValidTier3Bitmap(bitmap);
     }
 
     /// @notice Virtual internal hook for Tier 3 bitmap validation (allows fuzz harness synthetic bitmaps).
     function _validateBitmapCompatibility(uint32 bitmap) internal view virtual {
-        if (!HookPermissionMasks.isValidTier3Bitmap(bitmap)) {
+        if (!AccessControlLogic.checkValidTier3Bitmap(bitmap)) {
             revert InvalidBlockBitmap(bitmap);
         }
     }
@@ -90,192 +94,93 @@ contract HookRigOrchestrator is
     /// @notice Registers a composable block stack or preset for a standard or launchpad Uniswap v4 pool.
     function registerPoolStack(PoolKey calldata key, PoolStackConfig calldata config) external override {
         PoolId poolId = key.toId();
-        if (_poolMeta[poolId].configured) revert PoolAlreadyConfigured(poolId);
-        (uint160 existingSqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, poolId);
-        if (existingSqrtPriceX96 != 0) revert PoolAlreadyInitialized(poolId);
-        bool isLaunchpad = config.authorizedCurve != address(0);
-        if (isLaunchpad && msg.sender != launchpadFactory) {
-            revert OnlyLaunchpadFactory(msg.sender);
-        }
-        if (
-            !isLaunchpad && config.poolAdmin != address(0) && msg.sender != config.poolAdmin
-                && msg.sender != launchpadFactory
-        ) {
-            revert OnlyPoolAdmin(msg.sender);
-        }
-        _configurePoolStackInternal(key, poolId, config, isLaunchpad, config.authorizedCurve);
+        (uint32 bitmap, address admin) = AccessControlLogic.initPoolMeta(
+            _poolMeta, poolManager, poolId, key.fee, key.currency0, key.currency1, config, launchpadFactory
+        );
+        _validateBitmapCompatibility(bitmap);
+        _configurePoolStackBlocks(poolId, config, bitmap, admin);
     }
 
     /// @notice Marks a launchpad pool as graduated and resets its Anti-snipe, WalletCap, and KingOfThePool clocks.
     function notifyPoolGraduated(PoolId poolId) external override {
-        PoolRuntimeMeta storage meta = _poolMeta[poolId];
-        if (msg.sender != meta.authorizedCurve && msg.sender != launchpadFactory) {
-            revert OnlyAuthorizedCurve(msg.sender);
-        }
-        if (meta.launchpadGraduated) {
-            revert PoolAlreadyGraduated(poolId);
-        }
-        meta.launchpadGraduated = true;
-        if ((meta.enabledBlocksBitmap & HookPermissionMasks.BIT_ANTI_SNIPE) != 0) {
-            _resetAntiSnipeGraduationClock(poolId);
-        }
-        if ((meta.enabledBlocksBitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0) {
-            _resetWalletCapGraduationClock(poolId);
-        }
-        if ((meta.enabledBlocksBitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0) {
-            _resetKingGraduationClock(poolId);
-        }
+        AntiSnipeLogic.resetGraduationClocks(
+            _poolMeta, _antiSnipeStates, _walletCapStates, _kingStates, poolId, launchpadFactory, true
+        );
     }
 
-    function _configurePoolStackInternal(
-        PoolKey calldata key,
-        PoolId poolId,
-        PoolStackConfig calldata config,
-        bool isLaunchpad,
-        address authorizedCurve
-    ) internal {
-        uint32 bitmap = config.presetId == PresetId.Blank
-            ? config.enabledBlocksBitmap
-            : (HookPermissionMasks.getPresetBitmap(config.presetId) | config.enabledBlocksBitmap);
+    function _configurePoolStackBlocks(PoolId poolId, PoolStackConfig calldata config, uint32 bitmap, address admin)
+        internal
+    {
+        DynamicFeeLogic.initFeeAndProtectionBlocks(
+            _dynamicFeeStates,
+            _managedFeeStates,
+            _marketHoursConfigs,
+            _antiSnipeStates,
+            _mevStates,
+            _jitConfigs,
+            _arbStates,
+            poolId,
+            config,
+            bitmap,
+            admin
+        );
+        BuySellTaxLogic.initRulesAndRewardsBlocks(
+            _accessConfigs,
+            _walletCapStates,
+            _taxConfigs,
+            _autoBurnConfigs,
+            _feeSharingConfigs,
+            _lpRewardsConfigs,
+            _swapRewardsConfigs,
+            poolId,
+            config,
+            bitmap,
+            admin
+        );
+        KingOfThePoolLogic.initExpansionBlocks(
+            _kingStates,
+            _circuitBreakers,
+            _referralConfigs,
+            _vestingSellConfigs,
+            _autoBuybackStates,
+            poolId,
+            config,
+            bitmap
+        );
 
-        if (bitmap == 0 || (bitmap & ~HookPermissionMasks.ALL_BLOCKS_MASK) != 0) {
-            revert InvalidBlockBitmap(bitmap);
-        }
-        _validateBitmapCompatibility(bitmap);
-
-        if ((bitmap & HookPermissionMasks.FEE_BLOCKS_MASK) != 0 && !key.fee.isDynamicFee()) {
-            revert DynamicFeeFlagRequired();
-        }
-
-        uint256 maxDeltaBps = _validateAggregateReturnDeltaBudget(config, bitmap);
-        if (maxDeltaBps > MAX_AGGREGATE_AFTER_SWAP_BPS) {
-            revert AggregateReturnDeltaBpsExceeded(maxDeltaBps, MAX_AGGREGATE_AFTER_SWAP_BPS);
-        }
-
-        address admin = config.poolAdmin != address(0) ? config.poolAdmin : msg.sender;
-        _poolMeta[poolId] = PoolRuntimeMeta({
-            presetId: config.presetId,
-            enabledBlocksBitmap: bitmap,
-            isToken0ProjectToken: config.isToken0ProjectToken,
-            configured: true,
-            isLaunchpadPool: isLaunchpad,
-            launchpadGraduated: !isLaunchpad,
-            authorizedCurve: authorizedCurve,
-            poolAdmin: admin,
-            projectCurrency: config.isToken0ProjectToken ? key.currency0 : key.currency1
-        });
-
-        if ((bitmap & HookPermissionMasks.BIT_DYNAMIC_FEE) != 0) {
-            _stageDynamicFee(poolId, config.dynamicFee);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_MANAGED_FEE) != 0) {
-            ManagedFeeParams memory mf = config.managedFee;
-            if (mf.manager == address(0)) mf.manager = admin;
-            _stageManagedFee(poolId, mf);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_MARKET_HOURS_FEE) != 0) {
-            _initMarketHoursFee(poolId, config.marketHoursFee);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_ANTI_SNIPE) != 0) {
-            _initAntiSnipe(poolId, config.antiSnipe);
-        }
-        if ((bitmap & (HookPermissionMasks.BIT_MEV_PROTECTION | HookPermissionMasks.BIT_JIT_GUARD)) != 0) {
-            _initMEVProtection(poolId, config.mevProtection);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_ARB_RECAPTURE) != 0) {
-            _stageArbRecapture(poolId, config.arbRecapture);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_ACCESS_CONTROL) != 0) {
-            AccessControlParams memory ac = config.accessControl;
-            if (ac.manager == address(0)) ac.manager = admin;
-            _initAccessControl(poolId, ac);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0) {
-            _initWalletCap(poolId, config.walletCap);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_BUY_SELL_TAX) != 0) {
-            _initBuySellTax(poolId, config.buySellTax);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_AUTO_BURN) != 0) {
-            _initAutoBurn(poolId, config.autoBurn);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_FEE_SHARING) != 0) {
-            _initFeeSharing(poolId, config.feeSharing);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_LP_REWARDS) != 0) {
-            _initLPRewards(poolId, config.lpRewards);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_SWAP_REWARDS) != 0) {
-            _initSwapRewards(poolId, config.swapRewards);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0) {
-            uint32 overrideDuration = (config.presetId == PresetId.WeeklyKingWithBuyRewards
-                    && config.kingOfThePool.roundDurationSeconds == 0)
-                ? uint32(168 hours)
-                : 0;
-            _initKingOfThePool(poolId, config.kingOfThePool, overrideDuration);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_CIRCUIT_BREAKER) != 0) {
-            _initCircuitBreaker(poolId, config.circuitBreaker);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_REFERRAL_SPLIT) != 0) {
-            _initReferralSplit(poolId, config.referralSplit);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_VESTING_SELL_CAP) != 0) {
-            _initVestingSellCap(poolId, config.vestingSellCap);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_AUTO_BUYBACK) != 0) {
-            _initAutoBuyback(poolId, config.autoBuyback);
-        }
-
-        emit PoolStackConfigured(poolId, config.presetId, bitmap, admin);
+        BuySellTaxLogic.validateTaxBudget(
+            _poolMeta,
+            _autoBurnConfigs,
+            _feeSharingConfigs,
+            _lpRewardsConfigs,
+            _kingStates,
+            _referralConfigs,
+            _autoBuybackStates,
+            poolId,
+            config.buySellTax.buyTaxBps,
+            config.buySellTax.sellTaxBps,
+            _protocolRoyaltyBps(),
+            false
+        );
     }
 
     /// @notice Updates the Buy/Sell Tax configuration for `poolId` (callable only by `poolAdmin`),
     ///         re-verifying the directional `2500 bps` aggregate return-delta budget.
     function setBuySellTax(PoolId poolId, uint16 buyTaxBps, uint16 sellTaxBps, address taxRecipient) external override {
-        PoolRuntimeMeta storage meta = _poolMeta[poolId];
-        if (!meta.configured) revert PoolNotConfigured(poolId);
-        if (msg.sender != meta.poolAdmin) revert OnlyPoolAdmin(msg.sender);
-
-        uint32 bitmap = meta.enabledBlocksBitmap;
-        if ((bitmap & HookPermissionMasks.BIT_BUY_SELL_TAX) == 0) revert PoolNotConfigured(poolId);
-        uint256 otherBuyBps = _protocolRoyaltyBps();
-        uint256 otherSellBps = _protocolRoyaltyBps();
-
-        if ((bitmap & HookPermissionMasks.BIT_ARB_RECAPTURE) != 0 && _arbStates[poolId].recaptureShareBps > 0) {
-            otherBuyBps += 1000;
-            otherSellBps += 1000;
-        }
-        if ((bitmap & HookPermissionMasks.BIT_AUTO_BURN) != 0) {
-            otherBuyBps += _autoBurnConfigs[poolId].burnOnBuyBps;
-        }
-        if ((bitmap & HookPermissionMasks.BIT_FEE_SHARING) != 0) {
-            otherBuyBps += _feeSharingConfigs[poolId].feeShareBps;
-            otherSellBps += _feeSharingConfigs[poolId].feeShareBps;
-        }
-        if ((bitmap & HookPermissionMasks.BIT_LP_REWARDS) != 0) {
-            otherBuyBps += _lpRewardsConfigs[poolId].extraBuyFeeBps;
-        }
-        if ((bitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0) {
-            otherBuyBps += _kingStates[poolId].potFeeOnBuyBps;
-        }
-        if ((bitmap & HookPermissionMasks.BIT_REFERRAL_SPLIT) != 0) {
-            otherBuyBps += _referralConfigs[poolId].referralFeeBps;
-            otherSellBps += _referralConfigs[poolId].referralFeeBps;
-        }
-        if ((bitmap & HookPermissionMasks.BIT_AUTO_BUYBACK) != 0) {
-            otherBuyBps += _autoBuybackStates[poolId].buybackFeeBps;
-            otherSellBps += _autoBuybackStates[poolId].buybackFeeBps;
-        }
-
-        uint256 newBuyTotal = otherBuyBps + buyTaxBps;
-        uint256 newSellTotal = otherSellBps + sellTaxBps;
-        uint256 maxTotal = newBuyTotal > newSellTotal ? newBuyTotal : newSellTotal;
-        if (maxTotal > MAX_AGGREGATE_AFTER_SWAP_BPS) {
-            revert AggregateReturnDeltaBpsExceeded(maxTotal, MAX_AGGREGATE_AFTER_SWAP_BPS);
-        }
-
+        BuySellTaxLogic.validateTaxBudget(
+            _poolMeta,
+            _autoBurnConfigs,
+            _feeSharingConfigs,
+            _lpRewardsConfigs,
+            _kingStates,
+            _referralConfigs,
+            _autoBuybackStates,
+            poolId,
+            buyTaxBps,
+            sellTaxBps,
+            _protocolRoyaltyBps(),
+            true
+        );
         _updateBuySellTax(poolId, buyTaxBps, sellTaxBps, taxRecipient);
     }
 
@@ -315,24 +220,22 @@ contract HookRigOrchestrator is
         PoolId poolId = key.toId();
         uint32 bitmap = _poolMeta[poolId].enabledBlocksBitmap;
 
-        if ((bitmap & HookPermissionMasks.BIT_ORACLE) != 0) {
-            _initOracle(poolId, tick);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_TWAMM) != 0) {
-            _initTWAMM(poolId);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_LIMIT_ORDERS) != 0) {
-            _initLimitOrders(poolId, tick);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_DYNAMIC_FEE) != 0) {
-            _anchorDynamicFeeTick(poolId, tick);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_MANAGED_FEE) != 0) {
-            _applyInitialManagedFee(poolManager, key, poolId);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_ARB_RECAPTURE) != 0) {
-            _anchorArbRecaptureTick(poolId, tick);
-        }
+        AntiSnipeLogic.resetGraduationClocks(
+            _poolMeta, _antiSnipeStates, _walletCapStates, _kingStates, poolId, launchpadFactory, false
+        );
+
+        OracleLogic.initAfterInitialize(
+            _oracleObservations,
+            _twammStates,
+            _limitOrderLastTick,
+            _dynamicFeeStates,
+            _managedFeeStates,
+            _arbStates,
+            poolManager,
+            key,
+            bitmap,
+            tick
+        );
 
         return IHooks.afterInitialize.selector;
     }
@@ -365,8 +268,11 @@ contract HookRigOrchestrator is
             }
         }
 
-        if ((bitmap & (HookPermissionMasks.BIT_MEV_PROTECTION | HookPermissionMasks.BIT_JIT_GUARD)) != 0) {
-            _recordLPAddition(poolId, user, params);
+        if (
+            (bitmap & (HookPermissionMasks.BIT_MEV_PROTECTION | HookPermissionMasks.BIT_JIT_GUARD)) != 0
+                && !(meta.isLaunchpadPool && sender == meta.authorizedCurve)
+        ) {
+            _recordLPAddition(poolId, sender, user, params);
         }
 
         return IHooks.beforeAddLiquidity.selector;
@@ -388,7 +294,7 @@ contract HookRigOrchestrator is
         }
 
         if ((bitmap & (HookPermissionMasks.BIT_MEV_PROTECTION | HookPermissionMasks.BIT_JIT_GUARD)) != 0) {
-            _enforceJITGuardOnRemove(poolId, user, params);
+            _enforceJITGuardOnRemove(poolId, sender, user, params);
         }
 
         return IHooks.beforeRemoveLiquidity.selector;
@@ -454,40 +360,39 @@ contract HookRigOrchestrator is
         BalanceDelta swapDelta
     ) internal returns (int128 hookDeltaUnspecified) {
         uint32 bitmap = _poolMeta[poolId].enabledBlocksBitmap;
-        bool isToken0Project = _poolMeta[poolId].isToken0ProjectToken;
-
-        TransientContext.PreSwapSnapshot memory snap = TransientContext.loadAndClearPreSwapSnapshot(poolId);
-        (, int24 postTick,,) = StateLibrary.getSlot0(poolManager, poolId);
-        int24 preTick = snap.active ? snap.tick : postTick;
-
-        if ((bitmap & HookPermissionMasks.BIT_MEV_PROTECTION) != 0) {
-            _enforceMEVAfterSwap(poolId, preTick, postTick, params.zeroForOne);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_CIRCUIT_BREAKER) != 0) {
-            _checkAndAdvanceCircuitBreaker(poolId, preTick, postTick);
-        }
-
-        PoolTokenDir.SwapContext memory ctx = PoolTokenDir.resolveSwapContext(key, params, swapDelta, isToken0Project);
+        PoolTokenDir.SwapContext memory ctx =
+            PoolTokenDir.resolveSwapContext(key, params, swapDelta, _poolMeta[poolId].isToken0ProjectToken);
         ctx.trader = trader;
-        ctx.preSwapTick = preTick;
-        ctx.postSwapTick = postTick;
+        {
+            TransientContext.PreSwapSnapshot memory snap = TransientContext.loadAndClearPreSwapSnapshot(poolId);
+            (, int24 postTick,,) = StateLibrary.getSlot0(poolManager, poolId);
+            int24 preTick = snap.active ? snap.tick : postTick;
+
+            if ((bitmap & HookPermissionMasks.BIT_MEV_PROTECTION) != 0) {
+                _enforceMEVAfterSwap(poolId, preTick, postTick, params.zeroForOne);
+            }
+            if ((bitmap & HookPermissionMasks.BIT_CIRCUIT_BREAKER) != 0) {
+                _checkAndAdvanceCircuitBreaker(poolId, preTick, postTick);
+            }
+            ctx.preSwapTick = preTick;
+            ctx.postSwapTick = postTick;
+        }
 
         uint256 totalCutAmount;
         (hookDeltaUnspecified, totalCutAmount) =
-            _executeAfterSwapDeltaWaterfall(poolManager, key, poolId, bitmap, isToken0Project, ctx);
+            _executeAfterSwapDeltaWaterfall(poolClaims, poolManager, key, poolId, bitmap, ctx);
 
         if ((bitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0) {
-            if (ctx.isBuy) {
-                uint256 netTokensToBuyer = 0;
-                if (ctx.isExactInput && ctx.grossUnspecifiedAmount > totalCutAmount) {
-                    netTokensToBuyer = ctx.grossUnspecifiedAmount - totalCutAmount;
-                } else if (!ctx.isExactInput) {
-                    netTokensToBuyer = ctx.settledSpecifiedAmount;
-                }
-                _enforceWalletCapAfterBuy(poolId, ctx.projectCurrency, ctx.trader, netTokensToBuyer);
-            } else {
-                TransientContext.setWalletCapExpectedBalance(poolId, ctx.trader, 0);
-            }
+            _enforceWalletCapAfterSwap(
+                poolId,
+                ctx.projectCurrency,
+                ctx.trader,
+                ctx.isBuy,
+                ctx.isExactInput,
+                ctx.grossUnspecifiedAmount,
+                ctx.settledSpecifiedAmount,
+                totalCutAmount
+            );
         }
 
         if ((bitmap & HookPermissionMasks.BIT_VESTING_SELL_CAP) != 0 && !ctx.isBuy) {
@@ -521,23 +426,9 @@ contract HookRigOrchestrator is
     /// @notice Allows an authorized LaunchCurve to seed initial sniper surcharges into Round #1 King of the Pool pot
     ///         (or into `poolAdmin` ERC-6909 claims if `currency` is not the pool's project token).
     function seedKingPotFromLaunchCurve(PoolId poolId, Currency currency, uint256 amount) external override {
-        PoolRuntimeMeta storage meta = _poolMeta[poolId];
-        if (msg.sender != meta.authorizedCurve && msg.sender != launchpadFactory) {
-            revert OnlyAuthorizedCurve(msg.sender);
-        }
-        if (amount == 0) return;
-        Currency existing = _kingStates[poolId].potCurrency;
-        if (
-            (meta.enabledBlocksBitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0
-                && currency == meta.projectCurrency
-                && (_kingStates[poolId].currentPotAmount == 0 || existing == currency)
-        ) {
-            _kingStates[poolId].potCurrency = currency;
-            _kingStates[poolId].currentPotAmount += amount;
-        } else {
-            address admin = meta.poolAdmin != address(0) ? meta.poolAdmin : owner();
-            poolClaims[poolId][currency][admin] += amount;
-        }
+        KingOfThePoolLogic.seedPotFromLaunchCurve(
+            _kingStates, _poolMeta, poolClaims, poolId, currency, amount, launchpadFactory, owner()
+        );
     }
 
     function _protocolRoyaltyBps() internal view virtual override returns (uint16) {
@@ -546,13 +437,6 @@ contract HookRigOrchestrator is
 
     function _protocolRoyaltyRecipient() internal view virtual override returns (address) {
         return PROTOCOL_ROYALTY_RECIPIENT;
-    }
-
-    function _creditClaimInternal(PoolId poolId, Currency currency, address beneficiary, uint256 amount)
-        internal
-        override
-    {
-        _creditPoolClaim(poolId, currency, beneficiary, amount);
     }
 
     function _updatePoolManagerDynamicFee(PoolKey calldata key, uint24 newFee) internal override {

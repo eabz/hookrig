@@ -49,12 +49,18 @@ library VestingSellCapLogic {
 
         if (ep.epochIndex != currentEpoch || ep.startOfEpochBalance == 0) {
             uint256 currentBal = IERC20(Currency.unwrap(projectCurrency)).balanceOf(seller);
+            if (currentBal == 0) {
+                currentBal = tokensSold;
+            }
             ep.epochIndex = currentEpoch;
             ep.startOfEpochBalance = uint128(currentBal > type(uint128).max ? type(uint128).max : currentBal);
             ep.soldInEpoch = 0;
         }
 
         uint256 maxAllowed = Math.mulDiv(ep.startOfEpochBalance, maxBps, 10_000, Math.Rounding.Floor);
+        if (maxAllowed == 0 && ep.startOfEpochBalance > 0) {
+            maxAllowed = 1;
+        }
         uint256 newSoldTotal = uint256(ep.soldInEpoch) + tokensSold;
         if (newSoldTotal > maxAllowed) {
             revert DailyVestingSellCapExceeded(seller, newSoldTotal, maxAllowed);

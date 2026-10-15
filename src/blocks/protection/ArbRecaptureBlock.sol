@@ -40,7 +40,7 @@ library ArbRecaptureLogic {
         PoolId poolId,
         int24 preSwapTick,
         int24 postSwapTick
-    ) external returns (uint16 effectiveCutBps) {
+    ) public returns (uint16 effectiveCutBps) {
         ArbRecaptureState storage state = states[poolId];
         if (state.recaptureShareBps == 0) return 0;
 
@@ -66,7 +66,35 @@ library ArbRecaptureLogic {
         if (rawCutBps > MAX_ARB_EFFECTIVE_CUT_BPS) {
             rawCutBps = MAX_ARB_EFFECTIVE_CUT_BPS;
         }
+        state.referenceTick = postSwapTick;
         effectiveCutBps = uint16(rawCutBps);
+    }
+
+    function processWaterfallArb(
+        mapping(PoolId => ArbRecaptureState) storage states,
+        PoolId poolId,
+        int24 preSwapTick,
+        int24 postSwapTick,
+        uint256 grossAmount,
+        bool isExactInput,
+        uint256 totalCutAmount,
+        uint256 lpDonationAmount
+    ) external returns (uint256 newTotalCut, uint256 newLpDonation) {
+        newTotalCut = totalCutAmount;
+        newLpDonation = lpDonationAmount;
+        uint16 arbBps = computeCutBps(states, poolId, preSwapTick, postSwapTick);
+        if (arbBps > 0) {
+            Math.Rounding rounding = isExactInput ? Math.Rounding.Floor : Math.Rounding.Ceil;
+            uint256 maxAllowed = Math.mulDiv(grossAmount, 2500, 10_000, rounding);
+            if (newTotalCut < maxAllowed) {
+                uint256 arbCut = Math.mulDiv(grossAmount, arbBps, 10_000, rounding);
+                if (newTotalCut + arbCut > maxAllowed) arbCut = maxAllowed - newTotalCut;
+                if (arbCut > 0) {
+                    newTotalCut += arbCut;
+                    newLpDonation += arbCut;
+                }
+            }
+        }
     }
 }
 

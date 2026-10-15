@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
+import {HookPermissionMasks} from "../../libraries/HookPermissionMasks.sol";
+import {PoolTokenDir} from "../../libraries/PoolTokenDir.sol";
+import {KingOfThePoolLogic} from "./KingOfThePoolBlock.sol";
 
 library AutoBuybackLogic {
+    using PoolIdLibrary for PoolKey;
+
     uint16 internal constant MAX_AUTO_BUYBACK_BPS = 500; // 5.00% hard cap
 
     struct AutoBuybackState {
@@ -21,6 +29,7 @@ library AutoBuybackLogic {
     event FloorBuybackTriggered(
         PoolId indexed poolId, Currency indexed currency, int24 postSwapTick, uint256 amountDeployed
     );
+    event LPRewardsDonated(PoolId indexed poolId, uint256 amount0, uint256 amount1);
 
     error AutoBuybackFeeExceedsCap(uint16 requestedBps);
     error InvalidAutoBuybackFloorTick(int24 triggerFloorTick);
@@ -33,7 +42,10 @@ library AutoBuybackLogic {
         if (params.buybackFeeBps > MAX_AUTO_BUYBACK_BPS) {
             revert AutoBuybackFeeExceedsCap(params.buybackFeeBps);
         }
-        if (params.triggerFloorTick < TickMath.MIN_TICK || params.triggerFloorTick > TickMath.MAX_TICK) {
+        if (
+            params.triggerFloorTick < TickMath.MIN_TICK || params.triggerFloorTick > TickMath.MAX_TICK
+                || (params.buybackFeeBps > 0 && params.minBuybackReserve == 0)
+        ) {
             revert InvalidAutoBuybackFloorTick(params.triggerFloorTick);
         }
         AutoBuybackState storage st = states[poolId];
@@ -51,7 +63,7 @@ library AutoBuybackLogic {
         int24 postSwapTick,
         bool isToken0ProjectToken,
         bool hasActiveLiquidity
-    ) external returns (uint256 deployedToFloor) {
+    ) public returns (uint256 deployedToFloor) {
         AutoBuybackState storage st = states[poolId];
         uint256 newReserve = st.reserveByCurrency[cutCurrency] + cutAmount;
         if (cutAmount > 0) {
@@ -67,6 +79,79 @@ library AutoBuybackLogic {
             st.reserveByCurrency[cutCurrency] = 0;
             st.totalFloorDefendedAmount += deployedToFloor;
             emit FloorBuybackTriggered(poolId, cutCurrency, postSwapTick, deployedToFloor);
+        }
+    }
+
+    function processWaterfallBuyback(
+        mapping(PoolId => AutoBuybackState) storage autoBuybackStates,
+        IPoolManager manager,
+        PoolId poolId,
+        Currency unspecifiedCurrency,
+        uint256 grossAmount,
+        int24 postSwapTick,
+        bool isExactInput,
+        bool isToken0ProjectToken,
+        bool hasActiveLiquidity,
+        uint256 totalCutAmount
+    ) external returns (uint256 newTotalCut, uint256 addedLpDonation) {
+        uint256 bbCut;
+        {
+            uint16 bbBps = autoBuybackStates[poolId].buybackFeeBps;
+            if (bbBps == 0) return (totalCutAmount, 0);
+            bbCut = _boundedCut(grossAmount, isExactInput, bbBps, totalCutAmount);
+        }
+        newTotalCut = totalCutAmount + bbCut;
+        addedLpDonation = accumulateAndCheckTrigger(
+            autoBuybackStates,
+            poolId,
+            unspecifiedCurrency,
+            bbCut,
+            postSwapTick,
+            isToken0ProjectToken,
+            hasActiveLiquidity
+        );
+        if (addedLpDonation > 0) {
+            if (addedLpDonation > bbCut) {
+                manager.burn(address(this), unspecifiedCurrency.toId(), addedLpDonation - bbCut);
+            }
+        } else if (bbCut > 0) {
+            manager.mint(address(this), unspecifiedCurrency.toId(), bbCut);
+        }
+    }
+
+    function settleLPDonation(
+        mapping(PoolId => uint256) storage totalLPRewardsDonated,
+        IPoolManager manager,
+        PoolKey calldata key,
+        bool hasActiveLiquidity,
+        Currency unspecifiedCurrency,
+        uint256 totalCutAmount,
+        uint256 lpDonationAmount
+    ) external returns (uint256 finalTotalCut) {
+        finalTotalCut = totalCutAmount;
+        if (hasActiveLiquidity) {
+            PoolId poolId = key.toId();
+            uint256 amount0 = unspecifiedCurrency == key.currency0 ? lpDonationAmount : 0;
+            uint256 amount1 = unspecifiedCurrency == key.currency1 ? lpDonationAmount : 0;
+            manager.donate(key, amount0, amount1, "");
+            totalLPRewardsDonated[poolId] += lpDonationAmount;
+            emit LPRewardsDonated(poolId, amount0, amount1);
+        } else {
+            finalTotalCut -= lpDonationAmount;
+        }
+    }
+
+    function _boundedCut(uint256 grossAmount, bool isExactInput, uint16 bps, uint256 currentTotal)
+        private
+        pure
+        returns (uint256 cut)
+    {
+        Math.Rounding rounding = isExactInput ? Math.Rounding.Floor : Math.Rounding.Ceil;
+        uint256 maxAllowed = Math.mulDiv(grossAmount, 2500, 10_000, rounding);
+        if (currentTotal >= maxAllowed) return 0;
+        cut = Math.mulDiv(grossAmount, bps, 10_000, rounding);
+        if (currentTotal + cut > maxAllowed) {
+            cut = maxAllowed - currentTotal;
         }
     }
 }

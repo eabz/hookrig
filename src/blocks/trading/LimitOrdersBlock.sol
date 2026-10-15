@@ -21,6 +21,9 @@ contract LimitOrderSwapExecutor is IUnlockCallback {
     using CurrencySettler for Currency;
 
     IPoolManager public immutable poolManager;
+    address public immutable hook;
+
+    error OnlyHookCaller(address caller);
 
     struct FillCallbackData {
         PoolKey key;
@@ -29,8 +32,9 @@ contract LimitOrderSwapExecutor is IUnlockCallback {
         address recipient;
     }
 
-    constructor(IPoolManager _poolManager) {
+    constructor(IPoolManager _poolManager, address _hook) {
         poolManager = _poolManager;
+        hook = _hook;
     }
 
     receive() external payable {}
@@ -40,6 +44,7 @@ contract LimitOrderSwapExecutor is IUnlockCallback {
         payable
         returns (uint256 outputAmount)
     {
+        if (msg.sender != hook) revert OnlyHookCaller(msg.sender);
         bytes memory res = poolManager.unlock(
             abi.encode(
                 FillCallbackData({key: key, zeroForOne: zeroForOne, inputAmount: inputAmount, recipient: recipient})
@@ -129,10 +134,12 @@ library LimitOrdersLogic {
     error InvalidOrderAmount();
     error InvalidTargetTick(int24 targetTick, int24 tickSpacing);
     error OrderPoolKeyMismatch();
+    error InsufficientPoolEscrow(PoolId poolId, Currency currency, uint256 requested, uint256 available);
 
     function placeOrder(
         mapping(uint256 => UserLimitOrder) storage orders,
         mapping(PoolId => mapping(int24 => mapping(bool => LimitOrderBucket))) storage buckets,
+        mapping(PoolId => mapping(Currency => uint256)) storage poolEscrow,
         uint256 orderId,
         PoolId poolId,
         PoolKey calldata key,
@@ -162,8 +169,12 @@ library LimitOrdersLogic {
             if (msg.value != inputAmount) revert InvalidOrderAmount();
         } else {
             if (msg.value != 0) revert InvalidOrderAmount();
-            IERC20(Currency.unwrap(inputCurrency)).safeTransferFrom(msg.sender, address(this), inputAmount);
+            IERC20 token = IERC20(Currency.unwrap(inputCurrency));
+            uint256 balBefore = token.balanceOf(address(this));
+            token.safeTransferFrom(msg.sender, address(this), inputAmount);
+            if (token.balanceOf(address(this)) - balBefore != inputAmount) revert InvalidOrderAmount();
         }
+        poolEscrow[poolId][inputCurrency] += inputAmount;
 
         orders[orderId] = UserLimitOrder({
             poolId: poolId,
@@ -182,6 +193,7 @@ library LimitOrdersLogic {
     function cancelOrder(
         mapping(uint256 => UserLimitOrder) storage orders,
         mapping(PoolId => mapping(int24 => mapping(bool => LimitOrderBucket))) storage buckets,
+        mapping(PoolId => mapping(Currency => uint256)) storage poolEscrow,
         PoolKey calldata key,
         uint256 orderId
     ) external {
@@ -197,14 +209,27 @@ library LimitOrdersLogic {
         bucket.totalInputAmount -= order.inputAmount;
 
         Currency inputCurrency = order.zeroForOne ? key.currency0 : key.currency1;
+        uint256 escrowed = poolEscrow[order.poolId][inputCurrency];
+        if (escrowed < order.inputAmount) {
+            revert InsufficientPoolEscrow(order.poolId, inputCurrency, order.inputAmount, escrowed);
+        }
+        poolEscrow[order.poolId][inputCurrency] = escrowed - order.inputAmount;
         inputCurrency.transfer(msg.sender, order.inputAmount);
 
         emit LimitOrderCancelled(orderId, order.poolId, msg.sender, order.inputAmount);
     }
 
+    function ensureExecutor(LimitOrderSwapExecutor executor) external returns (LimitOrderSwapExecutor) {
+        if (address(executor) == address(0)) {
+            executor = new LimitOrderSwapExecutor(IHasPoolManager(address(this)).poolManager(), address(this));
+        }
+        return executor;
+    }
+
     function claimOrder(
         mapping(uint256 => UserLimitOrder) storage orders,
         mapping(PoolId => mapping(int24 => mapping(bool => LimitOrderBucket))) storage buckets,
+        mapping(PoolId => mapping(Currency => uint256)) storage poolEscrow,
         mapping(PoolId => int24) storage lastTicks,
         PoolKey calldata key,
         uint256 orderId,
@@ -216,42 +241,63 @@ library LimitOrdersLogic {
         if (order.claimedOrCancelled) revert OrderAlreadyHandled(orderId);
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(order.poolId)) revert OrderPoolKeyMismatch();
 
-        LimitOrderBucket storage bucket = buckets[order.poolId][order.targetTick][order.zeroForOne];
-        if (!bucket.filled) revert BucketNotYetFilled(orderId);
+        {
+            LimitOrderBucket storage bucket = buckets[order.poolId][order.targetTick][order.zeroForOne];
+            if (!bucket.filled) revert BucketNotYetFilled(orderId);
 
-        order.claimedOrCancelled = true;
-        bucket.totalInputAmount -= order.inputAmount;
-        if (bucket.totalInputAmount == 0) {
-            bucket.filled = false;
+            order.claimedOrCancelled = true;
+            bucket.totalInputAmount -= order.inputAmount;
+            if (bucket.totalInputAmount == 0) {
+                bucket.filled = false;
+            }
         }
 
         Currency inputCurrency = order.zeroForOne ? key.currency0 : key.currency1;
-        uint128 paidOut = order.inputAmount;
-
-        if (swapOnClaim && address(executor) != address(0)) {
-            PoolId poolId = order.poolId;
-            TransientContext.setInternalHookExecution(poolId, true);
-            uint256 outAmount;
-            if (inputCurrency.isAddressZero()) {
-                outAmount = executor.executeFillSwap{value: order.inputAmount}(
-                    key, order.zeroForOne, order.inputAmount, msg.sender
-                );
-            } else {
-                IERC20(Currency.unwrap(inputCurrency)).safeTransfer(address(executor), order.inputAmount);
-                outAmount = executor.executeFillSwap(key, order.zeroForOne, order.inputAmount, msg.sender);
+        {
+            uint256 escrowed = poolEscrow[order.poolId][inputCurrency];
+            if (escrowed < order.inputAmount) {
+                revert InsufficientPoolEscrow(order.poolId, inputCurrency, order.inputAmount, escrowed);
             }
-            TransientContext.setInternalHookExecution(poolId, false);
-            if (outAmount == 0) revert BucketNotYetFilled(orderId);
-            paidOut = outAmount > type(uint128).max ? type(uint128).max : uint128(outAmount);
+            poolEscrow[order.poolId][inputCurrency] = escrowed - order.inputAmount;
+        }
 
-            IPoolManager pm = executor.poolManager();
-            (, int24 postTick,,) = StateLibrary.getSlot0(pm, poolId);
-            processCrossedTicks(lastTicks, buckets, poolId, key.tickSpacing, postTick);
+        uint128 paidOut = order.inputAmount;
+        if (swapOnClaim && address(executor) != address(0)) {
+            paidOut = _executeClaimSwap(lastTicks, buckets, key, order, inputCurrency, orderId, executor);
         } else {
             inputCurrency.transfer(msg.sender, order.inputAmount);
         }
 
         emit LimitOrderClaimed(orderId, order.poolId, msg.sender, paidOut);
+    }
+
+    function _executeClaimSwap(
+        mapping(PoolId => int24) storage lastTicks,
+        mapping(PoolId => mapping(int24 => mapping(bool => LimitOrderBucket))) storage buckets,
+        PoolKey calldata key,
+        UserLimitOrder storage order,
+        Currency inputCurrency,
+        uint256 orderId,
+        LimitOrderSwapExecutor executor
+    ) private returns (uint128 paidOut) {
+        PoolId poolId = order.poolId;
+        uint128 inAmt = order.inputAmount;
+        bool zeroForOne = order.zeroForOne;
+
+        TransientContext.setInternalHookExecution(poolId, true);
+        uint256 outAmount;
+        if (inputCurrency.isAddressZero()) {
+            outAmount = executor.executeFillSwap{value: inAmt}(key, zeroForOne, inAmt, msg.sender);
+        } else {
+            IERC20(Currency.unwrap(inputCurrency)).safeTransfer(address(executor), inAmt);
+            outAmount = executor.executeFillSwap(key, zeroForOne, inAmt, msg.sender);
+        }
+        TransientContext.setInternalHookExecution(poolId, false);
+        if (outAmount == 0) revert BucketNotYetFilled(orderId);
+        paidOut = outAmount > type(uint128).max ? type(uint128).max : uint128(outAmount);
+
+        (, int24 postTick,,) = StateLibrary.getSlot0(executor.poolManager(), poolId);
+        processCrossedTicks(lastTicks, buckets, poolId, key.tickSpacing, postTick);
     }
 
     function processCrossedTicks(
@@ -271,7 +317,7 @@ library LimitOrdersLogic {
 
         if (movedUp) {
             int24 rem = prevTick % step;
-            int24 aligned = rem == 0 ? prevTick : (rem > 0 ? prevTick - rem : prevTick - (rem + step));
+            int24 aligned = rem == 0 ? prevTick : (rem > 0 ? prevTick + (step - rem) : prevTick - rem);
             int24 t = aligned;
             for (; t <= postSwapTick && stepsChecked < MAX_TICK_FILLS_PER_SWAP; t += step) {
                 stepsChecked++;
@@ -288,7 +334,7 @@ library LimitOrdersLogic {
             }
         } else {
             int24 rem = prevTick % step;
-            int24 aligned = rem == 0 ? prevTick : (rem > 0 ? prevTick + (step - rem) : prevTick - rem);
+            int24 aligned = rem == 0 ? prevTick : (rem > 0 ? prevTick - rem : prevTick - (rem + step));
             int24 t = aligned;
             for (; t >= postSwapTick && stepsChecked < MAX_TICK_FILLS_PER_SWAP; t -= step) {
                 stepsChecked++;
@@ -326,6 +372,7 @@ abstract contract LimitOrdersBlock is IHookRigBlock {
         PoolId poolId => mapping(int24 tick => mapping(bool zeroForOne => LimitOrdersLogic.LimitOrderBucket bucket))
     ) internal _limitOrderBuckets;
     mapping(uint256 orderId => LimitOrdersLogic.UserLimitOrder order) internal _limitOrders;
+    mapping(PoolId poolId => mapping(Currency currency => uint256 amount)) public limitOrderPoolEscrow;
 
     function _initLimitOrders(PoolId poolId, int24 initialTick) internal {
         _limitOrderLastTick[poolId] = initialTick;
@@ -342,13 +389,21 @@ abstract contract LimitOrdersBlock is IHookRigBlock {
     {
         orderId = nextLimitOrderId++;
         LimitOrdersLogic.placeOrder(
-            _limitOrders, _limitOrderBuckets, orderId, key.toId(), key, targetTick, zeroForOne, inputAmount
+            _limitOrders,
+            _limitOrderBuckets,
+            limitOrderPoolEscrow,
+            orderId,
+            key.toId(),
+            key,
+            targetTick,
+            zeroForOne,
+            inputAmount
         );
     }
 
     /// @notice Guarantee liveness: makers can always cancel unfilled orders and recover escrowed tokens.
     function cancelLimitOrder(PoolKey calldata key, uint256 orderId) external {
-        LimitOrdersLogic.cancelOrder(_limitOrders, _limitOrderBuckets, key, orderId);
+        LimitOrdersLogic.cancelOrder(_limitOrders, _limitOrderBuckets, limitOrderPoolEscrow, key, orderId);
     }
 
     /// @notice Guarantee liveness: makers can always claim/withdraw orders once their target tick has been crossed.
@@ -356,11 +411,18 @@ abstract contract LimitOrdersBlock is IHookRigBlock {
         bool swapOnClaim = _swapFilledOrderOnClaim();
         LimitOrderSwapExecutor executor = _limitOrderExecutor;
         if (swapOnClaim && address(executor) == address(0)) {
-            executor = new LimitOrderSwapExecutor(IHasPoolManager(address(this)).poolManager());
+            executor = LimitOrdersLogic.ensureExecutor(executor);
             _limitOrderExecutor = executor;
         }
         LimitOrdersLogic.claimOrder(
-            _limitOrders, _limitOrderBuckets, _limitOrderLastTick, key, orderId, swapOnClaim, executor
+            _limitOrders,
+            _limitOrderBuckets,
+            limitOrderPoolEscrow,
+            _limitOrderLastTick,
+            key,
+            orderId,
+            swapOnClaim,
+            executor
         );
     }
 

@@ -152,6 +152,9 @@ contract LaunchpadFactory is ITokenLaunchpad {
         bytes32 salt
     ) external returns (address token, address curve, PoolKey memory key) {
         if (address(hookContract) == address(0)) hookContract = defaultOrchestrator;
+        if (nativeConfig.bands.length == 0) {
+            revert InvalidCurveConfiguration();
+        }
 
         uint256 availableSupply = _computeAvailableCurveSupply(meta);
         uint256 totalBandTokens = 0;
@@ -182,9 +185,10 @@ contract LaunchpadFactory is ITokenLaunchpad {
     ) internal pure {
         uint32 resolvedBitmap = HookPermissionMasks.getPresetBitmap(stackConfig.presetId)
         | stackConfig.enabledBlocksBitmap;
+        uint16 effectivePoolCapBps = stackConfig.walletCap.maxWalletBps > 0 ? stackConfig.walletCap.maxWalletBps : 200;
         if (
             (resolvedBitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0 && curveWalletCapBps > 0
-                && stackConfig.walletCap.maxWalletBps < curveWalletCapBps
+                && effectivePoolCapBps < curveWalletCapBps
         ) {
             revert PostGraduationWalletCapBelowCurveCap(stackConfig.walletCap.maxWalletBps, curveWalletCapBps);
         }

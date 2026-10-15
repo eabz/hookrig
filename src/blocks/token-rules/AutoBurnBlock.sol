@@ -5,10 +5,14 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
 library AutoBurnLogic {
+    using SafeERC20 for IERC20;
+
     uint16 internal constant MAX_AUTO_BURN_BPS = 500; // 5.00% hard cap
     address internal constant DEAD_ADDRESS = 0x000000000000000000000000000000000000dEaD;
 
@@ -34,14 +38,14 @@ library AutoBurnLogic {
         PoolId poolId,
         Currency currency,
         uint256 burnAmount
-    ) external {
+    ) public {
         if (burnAmount == 0) return;
 
         if (configs[poolId].useTokenBurnCall && !currency.isAddressZero()) {
             manager.take(currency, address(this), burnAmount);
             try ERC20Burnable(Currency.unwrap(currency)).burn(burnAmount) {}
             catch {
-                IERC20(Currency.unwrap(currency)).transfer(DEAD_ADDRESS, burnAmount);
+                IERC20(Currency.unwrap(currency)).safeTransfer(DEAD_ADDRESS, burnAmount);
             }
         } else {
             manager.take(currency, DEAD_ADDRESS, burnAmount);
@@ -49,6 +53,32 @@ library AutoBurnLogic {
 
         totalAutoBurnedByPool[poolId] += burnAmount;
         emit TokensAutoBurned(poolId, currency, burnAmount);
+    }
+
+    function processWaterfallBurn(
+        mapping(PoolId => IHookRigBlock.AutoBurnParams) storage configs,
+        mapping(PoolId => uint256) storage totalAutoBurnedByPool,
+        IPoolManager manager,
+        PoolId poolId,
+        Currency unspecifiedCurrency,
+        uint256 grossAmount,
+        bool isExactInput,
+        uint256 totalCutAmount
+    ) external returns (uint256 newTotalCut) {
+        newTotalCut = totalCutAmount;
+        uint16 burnBps = configs[poolId].burnOnBuyBps;
+        if (burnBps > 0) {
+            Math.Rounding rounding = isExactInput ? Math.Rounding.Floor : Math.Rounding.Ceil;
+            uint256 maxAllowed = Math.mulDiv(grossAmount, 2500, 10_000, rounding);
+            if (newTotalCut < maxAllowed) {
+                uint256 burnCut = Math.mulDiv(grossAmount, burnBps, 10_000, rounding);
+                if (newTotalCut + burnCut > maxAllowed) burnCut = maxAllowed - newTotalCut;
+                if (burnCut > 0) {
+                    newTotalCut += burnCut;
+                    execute(configs, totalAutoBurnedByPool, manager, poolId, unspecifiedCurrency, burnCut);
+                }
+            }
+        }
     }
 }
 

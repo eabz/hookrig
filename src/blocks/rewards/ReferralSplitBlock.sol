@@ -2,9 +2,16 @@
 pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {CurrencySettler} from "@openzeppelin/uniswap-hooks/utils/CurrencySettler.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
+import {IHookRigOrchestrator} from "../../interfaces/IHookRigOrchestrator.sol";
 
 library ReferralSplitLogic {
+    using CurrencySettler for Currency;
+
     uint16 internal constant MAX_REFERRAL_FEE_BPS = 300; // 3.00% hard cap
 
     error ReferralFeeExceedsCap(uint16 requestedBps);
@@ -33,6 +40,39 @@ library ReferralSplitLogic {
         if (referrers[poolId][trader] == address(0)) {
             referrers[poolId][trader] = referrer;
             emit ReferrerRegistered(poolId, trader, referrer);
+        }
+    }
+
+    function processWaterfallReferral(
+        mapping(PoolId => mapping(Currency => mapping(address => uint256))) storage poolClaims,
+        mapping(PoolId => IHookRigBlock.ReferralSplitParams) storage referralConfigs,
+        mapping(PoolId => mapping(address => address)) storage traderReferrer,
+        IPoolManager manager,
+        PoolId poolId,
+        address trader,
+        Currency unspecifiedCurrency,
+        uint256 grossAmount,
+        bool isExactInput,
+        uint256 totalCutAmount
+    ) external returns (uint256 newTotalCut) {
+        newTotalCut = totalCutAmount;
+        address referrer = traderReferrer[poolId][trader];
+        if (referrer == address(0) || referrer == trader) return newTotalCut;
+        uint256 refCut;
+        {
+            uint16 refBps = referralConfigs[poolId].referralFeeBps;
+            if (refBps == 0) return newTotalCut;
+            Math.Rounding rounding = isExactInput ? Math.Rounding.Floor : Math.Rounding.Ceil;
+            uint256 maxAllowed = Math.mulDiv(grossAmount, 2500, 10_000, rounding);
+            if (newTotalCut >= maxAllowed) return newTotalCut;
+            refCut = Math.mulDiv(grossAmount, refBps, 10_000, rounding);
+            if (newTotalCut + refCut > maxAllowed) refCut = maxAllowed - newTotalCut;
+        }
+        if (refCut > 0) {
+            newTotalCut += refCut;
+            unspecifiedCurrency.take(manager, address(this), refCut, true);
+            poolClaims[poolId][unspecifiedCurrency][referrer] += refCut;
+            emit IHookRigOrchestrator.ClaimCredited(poolId, unspecifiedCurrency, referrer, refCut);
         }
     }
 }

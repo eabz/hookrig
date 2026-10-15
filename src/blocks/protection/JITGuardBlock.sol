@@ -17,16 +17,15 @@ library JITGuardLogic {
     function recordAddition(
         mapping(PoolId => mapping(bytes32 => uint32)) storage lpAddedBlock,
         PoolId poolId,
+        address sender,
         address lpOwner,
         ModifyLiquidityParams calldata params
     ) external {
-        bytes32 posKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
-        if (lpAddedBlock[poolId][posKey] == 0) {
-            lpAddedBlock[poolId][posKey] = uint32(block.number);
-        }
-        bytes32 rangeKey = keccak256(abi.encodePacked(params.tickLower, params.tickUpper, params.salt));
-        if (lpAddedBlock[poolId][rangeKey] == 0) {
-            lpAddedBlock[poolId][rangeKey] = uint32(block.number);
+        bytes32 senderKey = keccak256(abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt));
+        lpAddedBlock[poolId][senderKey] = uint32(block.number);
+        if (lpOwner != sender) {
+            bytes32 userKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
+            lpAddedBlock[poolId][userKey] = uint32(block.number);
         }
     }
 
@@ -34,17 +33,25 @@ library JITGuardLogic {
         mapping(PoolId => JITConfig) storage configs,
         mapping(PoolId => mapping(bytes32 => uint32)) storage lpAddedBlock,
         PoolId poolId,
+        address sender,
         address lpOwner,
         ModifyLiquidityParams calldata params
     ) external view {
-        uint32 minHold = configs[poolId].minLPHoldBlocks;
+        JITConfig storage cfg = configs[poolId];
+        uint32 minHold = cfg.minLPHoldBlocks;
+        if (minHold == 0 && cfg.jitExitPenaltyBps > 0) {
+            minHold = 1;
+        }
         if (minHold == 0) return;
 
-        bytes32 posKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
-        uint32 addedBlock = lpAddedBlock[poolId][posKey];
-        if (addedBlock == 0) {
-            bytes32 rangeKey = keccak256(abi.encodePacked(params.tickLower, params.tickUpper, params.salt));
-            addedBlock = lpAddedBlock[poolId][rangeKey];
+        bytes32 senderKey = keccak256(abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt));
+        uint32 addedBlock = lpAddedBlock[poolId][senderKey];
+        if (lpOwner != sender) {
+            bytes32 userKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
+            uint32 userAdded = lpAddedBlock[poolId][userKey];
+            if (userAdded > addedBlock) {
+                addedBlock = userAdded;
+            }
         }
         if (addedBlock > 0 && block.number < uint256(addedBlock) + uint256(minHold)) {
             revert JITLiquidityCooldownActive(addedBlock, uint32(block.number), minHold);
@@ -71,14 +78,18 @@ abstract contract JITGuardBlock is IHookRigBlock {
             JITGuardLogic.JITConfig({minLPHoldBlocks: minLPHoldBlocks, jitExitPenaltyBps: jitExitPenaltyBps});
     }
 
-    function _recordLPAddition(PoolId poolId, address lpOwner, ModifyLiquidityParams calldata params) internal {
-        JITGuardLogic.recordAddition(_lpAddedBlock, poolId, lpOwner, params);
+    function _recordLPAddition(PoolId poolId, address sender, address lpOwner, ModifyLiquidityParams calldata params)
+        internal
+    {
+        JITGuardLogic.recordAddition(_lpAddedBlock, poolId, sender, lpOwner, params);
     }
 
-    function _enforceJITGuardOnRemove(PoolId poolId, address lpOwner, ModifyLiquidityParams calldata params)
-        internal
-        view
-    {
-        JITGuardLogic.enforceOnRemove(_jitConfigs, _lpAddedBlock, poolId, lpOwner, params);
+    function _enforceJITGuardOnRemove(
+        PoolId poolId,
+        address sender,
+        address lpOwner,
+        ModifyLiquidityParams calldata params
+    ) internal view {
+        JITGuardLogic.enforceOnRemove(_jitConfigs, _lpAddedBlock, poolId, sender, lpOwner, params);
     }
 }

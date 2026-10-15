@@ -20,6 +20,8 @@ import {AntiSnipeLogic} from "../../../src/blocks/protection/AntiSnipeBlock.sol"
 contract HookRigOrchestratorHarness is HookRigOrchestrator {
     using PoolIdLibrary for PoolKey;
 
+    bool public constant IS_TEST = true;
+
     constructor(IPoolManager _poolManager, address _initialOwner) HookRigOrchestrator(_poolManager, _initialOwner) {}
 
     /// @notice Full King of the Pool round state (`_kingStates`), including `potCurrency`.

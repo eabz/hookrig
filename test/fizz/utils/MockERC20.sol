@@ -104,15 +104,15 @@ contract MockERC20 is IERC20 {
                                CONSTRUCTOR
     //////////////////////////////////////////////////////////////*/
 
-    constructor(address recipient, uint256 mintAmount, string memory name, string memory symbol, uint8 decimals) {
-        _name = name;
-        _symbol = symbol;
-        _decimals = decimals;
+    constructor(address recipient, uint256 mintAmount, string memory name_, string memory symbol_, uint8 decimals_) {
+        _name = name_;
+        _symbol = symbol_;
+        _decimals = decimals_;
 
         INITIAL_CHAIN_ID = _pureChainId();
         INITIAL_DOMAIN_SEPARATOR = computeDomainSeparator();
 
-        _mint(recipient, mintAmount * 10 ** decimals);
+        _mint(recipient, mintAmount * 10 ** decimals_);
     }
 
     /*//////////////////////////////////////////////////////////////

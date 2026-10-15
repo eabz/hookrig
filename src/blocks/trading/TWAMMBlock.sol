@@ -14,6 +14,7 @@ library TWAMMLogic {
     using SafeERC20 for IERC20;
 
     uint64 internal constant MAX_TWAMM_DURATION = 365 days;
+    uint256 internal constant MAX_ACTIVE_TWAMM_ORDERS = 256;
 
     struct TWAMMState {
         uint64 lastVirtualOrderTimestamp;
@@ -51,6 +52,7 @@ library TWAMMLogic {
     error NotTWAMMOrderOwner(address caller);
     error TWAMMOrderNotActive(uint256 orderId);
     error TWAMMPoolKeyMismatch();
+    error MaxActiveTWAMMOrdersReached(PoolId poolId);
 
     function submitOrder(
         mapping(PoolId => TWAMMState) storage states,
@@ -67,13 +69,19 @@ library TWAMMLogic {
             revert InvalidTWAMMInterval();
         }
         executePending(states, orders, activeOrderIds, poolId);
+        if (activeOrderIds[poolId].length >= MAX_ACTIVE_TWAMM_ORDERS) {
+            revert MaxActiveTWAMMOrdersReached(poolId);
+        }
 
         Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
         if (inputCurrency.isAddressZero()) {
             if (msg.value != totalAmount) revert InvalidTWAMMInterval();
         } else {
             if (msg.value != 0) revert InvalidTWAMMInterval();
-            IERC20(Currency.unwrap(inputCurrency)).safeTransferFrom(msg.sender, address(this), totalAmount);
+            IERC20 token = IERC20(Currency.unwrap(inputCurrency));
+            uint256 balBefore = token.balanceOf(address(this));
+            token.safeTransferFrom(msg.sender, address(this), totalAmount);
+            if (token.balanceOf(address(this)) - balBefore != totalAmount) revert InvalidTWAMMInterval();
         }
 
         uint128 rate = uint128(Math.mulDiv(totalAmount, 1, durationSeconds, Math.Rounding.Floor));
@@ -170,7 +178,21 @@ library TWAMMLogic {
         uint256 i = 0;
         while (i < ids.length) {
             TWAMMOrder storage order = orders[ids[i]];
-            if (order.cancelled || order.expirationTimestamp <= lastTs) {
+            if (order.cancelled) {
+                ids[i] = ids[ids.length - 1];
+                ids.pop();
+                continue;
+            }
+            if (order.expirationTimestamp <= lastTs) {
+                if (order.zeroForOne) {
+                    state.sellRate0For1 = state.sellRate0For1 >= order.sellRatePerSecond
+                        ? state.sellRate0For1 - order.sellRatePerSecond
+                        : 0;
+                } else {
+                    state.sellRate1For0 = state.sellRate1For0 >= order.sellRatePerSecond
+                        ? state.sellRate1For0 - order.sellRatePerSecond
+                        : 0;
+                }
                 ids[i] = ids[ids.length - 1];
                 ids.pop();
                 continue;

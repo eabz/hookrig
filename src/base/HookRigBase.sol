@@ -13,6 +13,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IMsgSender} from "../interfaces/IMsgSender.sol";
 import {IHookRigOrchestrator} from "../interfaces/IHookRigOrchestrator.sol";
+import {AccessControlLogic} from "../blocks/protection/AccessControlBlock.sol";
 
 /// @title HookRigBase
 /// @notice Base security & isolation contract for HookRig hooks:
@@ -50,7 +51,7 @@ abstract contract HookRigBase is
     uint16 public constant override PROTOCOL_ROYALTY_BPS = 5;
 
     /// @notice Publicly exposed static protocol royalty recipient address defined at build time (no admin key).
-    address public constant override PROTOCOL_ROYALTY_RECIPIENT = 0xEB1492572984f5353a3089a49C01420F171370C2;
+    address public constant override PROTOCOL_ROYALTY_RECIPIENT = 0x576e9C47665887298EB39eeaa070Dfc1fF6B960A;
 
     /// @notice Strictly isolated per-PoolId ERC-6909 claim ledger: poolId => currency => beneficiary => amount
     mapping(PoolId poolId => mapping(Currency currency => mapping(address beneficiary => uint256 amount))) public
@@ -75,24 +76,7 @@ abstract contract HookRigBase is
 
     /// @notice Resolves the true end-user initiator address safely (preventing untrusted router hookData spoofing).
     function _resolveUser(address routerSender, bytes calldata hookData) internal view returns (address user) {
-        if (isTrustedRouter[routerSender]) {
-            try IMsgSender(routerSender).msgSender() returns (address resolved) {
-                if (resolved != address(0)) return resolved;
-            } catch {}
-            if (hookData.length >= 32) {
-                user = abi.decode(hookData[:32], (address));
-                if (user != address(0)) return user;
-            }
-        }
-        return routerSender;
-    }
-
-    /// @notice Credits an ERC-6909 claim inside PoolManager isolated to `poolId` and `beneficiary`.
-    function _creditPoolClaim(PoolId poolId, Currency currency, address beneficiary, uint256 amount) internal {
-        if (amount == 0 || beneficiary == address(0)) return;
-        currency.take(poolManager, address(this), amount, true);
-        poolClaims[poolId][currency][beneficiary] += amount;
-        emit ClaimCredited(poolId, currency, beneficiary, amount);
+        return AccessControlLogic.resolveUser(isTrustedRouter, routerSender, hookData);
     }
 
     /// @notice Pull-based claim withdrawal so blacklisted or reverting tokens never brick swaps.
@@ -102,17 +86,8 @@ abstract contract HookRigBase is
         override
         nonReentrant
     {
-        uint256 available = poolClaims[poolId][currency][msg.sender];
-        uint256 withdrawAmount = amount == 0 ? available : amount;
-        if (withdrawAmount == 0 || withdrawAmount > available) {
-            revert InsufficientClaimBalance(withdrawAmount, available);
-        }
-        poolClaims[poolId][currency][msg.sender] = available - withdrawAmount;
-
-        address recipient = to == address(0) ? msg.sender : to;
-        _payoutERC6909Claim(currency, recipient, withdrawAmount);
-
-        emit ClaimWithdrawn(poolId, currency, msg.sender, withdrawAmount);
+        uint256 withdrawAmount = AccessControlLogic.validateWithdrawClaim(poolClaims, poolId, currency, amount);
+        _payoutERC6909Claim(currency, to == address(0) ? msg.sender : to, withdrawAmount);
     }
 
     /// @notice Unlocks PoolManager to burn ERC-6909 claims held by this hook and transfer underlying currency to `to`.

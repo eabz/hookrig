@@ -5,6 +5,8 @@ import {Handlers} from "./handlers/Handlers.sol";
 
 /// @notice Entry point for fuzzing tests
 contract FuzzTester is Handlers {
+    bool public constant IS_TEST = true;
+
     constructor() payable {
         setup();
     }
