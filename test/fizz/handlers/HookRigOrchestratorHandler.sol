@@ -243,10 +243,12 @@ abstract contract HookRigOrchestratorHandler is Properties {
         orchestrator.finalizeExpiredKingRound(PoolId.wrap(poolId));
     }
 
-    function hookRigOrchestrator_placeLimitOrder(PoolKey memory key, int24 targetTick, bool zeroForOne, uint128 inputAmount)
-        public
-        tracked
-    {
+    function hookRigOrchestrator_placeLimitOrder(
+        PoolKey memory key,
+        int24 targetTick,
+        bool zeroForOne,
+        uint128 inputAmount
+    ) public tracked {
         _setCallContext(CallKind.PLACE_ORDER, actor, 0, address(0));
         Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
         uint256 balBefore = _currencyBalance(inputCurrency, actor);
@@ -271,7 +273,9 @@ abstract contract HookRigOrchestratorHandler is Properties {
         order.limitsEnabled =
             (orchestrator.getPoolEnabledBlocks(key.toId()) & HookPermissionMasks.BIT_LIMIT_ORDERS) != 0;
 
-        property_SP03_limitOrderPlaceEscrow(hookAfter > hookBefore ? hookAfter - hookBefore : 0, order.paid, inputAmount);
+        property_SP03_limitOrderPlaceEscrow(
+            hookAfter > hookBefore ? hookAfter - hookBefore : 0, order.paid, inputAmount
+        );
     }
 
     function hookRigOrchestrator_registerReferrer(bytes32 poolId, address referrer) public tracked asActor {
@@ -466,12 +470,64 @@ abstract contract HookRigOrchestratorHandler is Properties {
         bool zeroForOne,
         uint128 totalAmount,
         uint64 durationSeconds
-    ) internal asActor {
-        orchestrator.submitTWAMMOrder(key, zeroForOne, totalAmount, durationSeconds);
+    ) internal asActor returns (uint256 orderId) {
+        orderId = orchestrator.submitTWAMMOrder(key, zeroForOne, totalAmount, durationSeconds);
     }
 
     function _hookRigOrchestrator_setTrustedRouter(address router, bool trusted) internal asAdmin {
         orchestrator.setTrustedRouter(router, trusted);
+    }
+
+    /// @notice Cancels an active tracked TWAMM order and verifies the unstreamed refund and rate removal (GL-17).
+    function hookRigOrchestrator_cancelTWAMMOrder_clamped(uint256 orderSeed) public tracked {
+        if (ghosts.twammOrders.length == 0) return;
+        TwammOrder storage order = ghosts.twammOrders[orderSeed % ghosts.twammOrders.length];
+        if (order.cancelled || order.expiry <= block.timestamp || order.poolIdx >= poolKeys.length) return;
+        PoolKey memory key = poolKeys[order.poolIdx];
+        Currency inputCurrency = order.zeroForOne ? key.currency0 : key.currency1;
+        uint256 balBefore = _currencyBalance(inputCurrency, order.owner);
+        _setCallContext(CallKind.OTHER, order.owner, order.poolIdx, address(0));
+
+        vm.prank(order.owner);
+        uint256 refund = orchestrator.cancelTWAMMOrder(key, order.id);
+        order.cancelled = true;
+        uint256 balAfter = _currencyBalance(inputCurrency, order.owner);
+        lte(refund, order.total, "TWAMM cancel refunded more than totalAmount");
+        eq(balAfter - balBefore, refund, "TWAMM cancel balance credit != refundAmount");
+    }
+
+    /// @notice Updates buy/sell tax on a pool (exercising poolAdmin auth, decayOnly enforcement, and SP-23/SP-26).
+    function hookRigOrchestrator_setBuySellTax_clamped(
+        uint256 poolSeed,
+        uint16 newBuyTaxBps,
+        uint16 newSellTaxBps,
+        address newRecipient
+    ) public tracked {
+        uint256 idx = _poolIdx(poolSeed);
+        PoolId pid = poolKeys[idx].toId();
+        address expectedAdmin = ghosts.poolAdmin[idx];
+        address caller = poolSeed % 4 == 0 ? actor : expectedAdmin;
+        if (caller == address(0)) caller = actor;
+        address recipient = idx == POOL_XYK ? actors[1] : toActor(newRecipient);
+        uint16 curBuy = ghosts.cfgBps[idx][0];
+        uint16 curSell = ghosts.cfgBps[idx][1];
+        // 75% of the time clamp within decayOnly bounds; 25% of the time allow higher bps to exercise revert guards
+        if ((poolSeed >> 8) % 4 != 0) {
+            newBuyTaxBps = uint16(clampLte(newBuyTaxBps, curBuy));
+            newSellTaxBps = uint16(clampLte(newSellTaxBps, curSell));
+        } else {
+            newBuyTaxBps = uint16(clampLte(newBuyTaxBps, 1200));
+            newSellTaxBps = uint16(clampLte(newSellTaxBps, 1200));
+        }
+        _setCallContext(CallKind.OTHER, caller, idx, recipient);
+
+        vm.prank(caller);
+        orchestrator.setBuySellTax(pid, newBuyTaxBps, newSellTaxBps, recipient);
+        ghosts.cfgBps[idx][0] = newBuyTaxBps;
+        ghosts.cfgBps[idx][1] = newSellTaxBps;
+        property_SP23_noPrivilegeEscalation(
+            caller == expectedAdmin, "SP-23: setBuySellTax succeeded for a non-poolAdmin"
+        );
     }
 
     // ――――――――――――――――――――― Secondary clamping ―――――――――――――――――――――
@@ -550,18 +606,22 @@ abstract contract HookRigOrchestratorHandler is Properties {
         uint64 durationSeconds = uint64(clampBetween(duration, 1, 30 days));
         uint128 amount = uint128(clampBetween(totalAmount, durationSeconds, MAX_ORDER_AMOUNT));
         _setCallContext(CallKind.SUBMIT_TWAMM, actor, idx, address(0));
-        _hookRigOrchestrator_submitTWAMMOrder(poolKeys[idx], zeroForOne, amount, durationSeconds);
+        uint256 orderId = _hookRigOrchestrator_submitTWAMMOrder(poolKeys[idx], zeroForOne, amount, durationSeconds);
 
         // GL-17: `rate = floor(total / duration)` (`TWAMMBlock.sol:54`)
-        ghosts.twammOrders.push(
-            TwammOrder({
-                poolIdx: idx,
-                zeroForOne: zeroForOne,
-                rate: uint128(amount / durationSeconds),
-                expiry: uint64(block.timestamp) + durationSeconds,
-                total: amount
-            })
-        );
+        ghosts.twammOrders
+            .push(
+                TwammOrder({
+                    id: orderId,
+                    owner: actor,
+                    poolIdx: idx,
+                    zeroForOne: zeroForOne,
+                    rate: uint128(amount / durationSeconds),
+                    expiry: uint64(block.timestamp) + durationSeconds,
+                    total: amount,
+                    cancelled: false
+                })
+            );
         ghosts.twammSubmitted[poolKeys[idx].toId()][zeroForOne] += amount;
     }
 
@@ -583,6 +643,7 @@ abstract contract HookRigOrchestratorHandler is Properties {
     {
         uint32 bm = orchestrator.getPoolEnabledBlocks(pid);
         ghosts.registeredAtBlock[idx] = block.number;
+        ghosts.poolAdmin[idx] = cfg.poolAdmin != address(0) ? cfg.poolAdmin : actor;
         ghosts.acManager[idx] = cfg.accessControl.manager;
         ghosts.acChecks[idx] =
             (cfg.accessControl.checkBeforeSwap ? 1 : 0) | (cfg.accessControl.checkBeforeAddLiquidity ? 2 : 0);
@@ -646,17 +707,25 @@ abstract contract HookRigOrchestratorHandler is Properties {
         cfg.marketHoursFee = IHookRigBlock.MarketHoursFeeParams({
             openHourUtc: 13, closeHourUtc: 20, openFee: 1500, closedFee: 4000, weekendClosed: true
         });
-        cfg.antiSnipe = IHookRigBlock.AntiSnipeParams({launchFee: uint24(clampBetween(p >> 16, 2000, 800_000)), normalFee: 2000, decayBlocks: 10});
+        cfg.antiSnipe = IHookRigBlock.AntiSnipeParams({
+            launchFee: uint24(clampBetween(p >> 16, 2000, 800_000)), normalFee: 2000, decayBlocks: 10
+        });
         cfg.mevProtection = IHookRigBlock.MEVProtectionParams({
             maxTickDeltaPerSwap: int24(int256(clampBetween(p >> 40, 0, 5000))),
             minLPHoldBlocks: uint32(clampLte(p >> 56, 10_000)),
             jitExitPenaltyBps: 0
         });
-        cfg.arbRecapture = IHookRigBlock.ArbRecaptureParams({recaptureShareBps: uint16(clampLte(p >> 72, 8000)), arbTriggerTickDelta: 10});
-        cfg.accessControl = IHookRigBlock.AccessControlParams({
-            checkBeforeAddLiquidity: (p >> 88) % 2 == 0, checkBeforeSwap: (p >> 89) % 2 == 0, merkleRoot: bytes32(0), manager: actor
+        cfg.arbRecapture = IHookRigBlock.ArbRecaptureParams({
+            recaptureShareBps: uint16(clampLte(p >> 72, 8000)), arbTriggerTickDelta: 10
         });
-        cfg.walletCap = IHookRigBlock.WalletCapParams({maxWalletBps: uint16(clampBetween(p >> 90, 10, 10_000)), sunsetBlocks: 100});
+        cfg.accessControl = IHookRigBlock.AccessControlParams({
+            checkBeforeAddLiquidity: (p >> 88) % 2 == 0,
+            checkBeforeSwap: (p >> 89) % 2 == 0,
+            merkleRoot: bytes32(0),
+            manager: actor
+        });
+        cfg.walletCap =
+            IHookRigBlock.WalletCapParams({maxWalletBps: uint16(clampBetween(p >> 90, 10, 10_000)), sunsetBlocks: 100});
         cfg.buySellTax =
             IHookRigBlock.BuySellTaxParams({buyTaxBps: bps, sellTaxBps: bps, taxRecipient: recipient, decayOnly: true});
         cfg.autoBurn = IHookRigBlock.AutoBurnParams({burnOnBuyBps: bps, useTokenBurnCall: (p >> 106) % 2 == 0});
@@ -672,8 +741,10 @@ abstract contract HookRigOrchestratorHandler is Properties {
             maxWindowTickDeviation: int24(int256(clampBetween(p >> 107, 1, 5000))), windowSeconds: 300
         });
         cfg.referralSplit = IHookRigBlock.ReferralSplitParams({referralFeeBps: bps});
-        cfg.vestingSellCap = IHookRigBlock.VestingSellCapParams({maxDailySellBps: uint16(clampBetween(p >> 123, 50, 10_000))});
-        cfg.autoBuyback = IHookRigBlock.AutoBuybackParams({buybackFeeBps: bps, triggerFloorTick: -50, minBuybackReserve: 1 ether});
+        cfg.vestingSellCap =
+            IHookRigBlock.VestingSellCapParams({maxDailySellBps: uint16(clampBetween(p >> 123, 50, 10_000))});
+        cfg.autoBuyback =
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: bps, triggerFloorTick: -50, minBuybackReserve: 1 ether});
     }
 
     /// @notice Runs a SP-30 probe in a reverting self-call and decodes its outcome.

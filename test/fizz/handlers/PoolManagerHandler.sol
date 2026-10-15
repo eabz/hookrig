@@ -238,7 +238,8 @@ abstract contract PoolManagerHandler is Properties {
         (r.tickLower, r.tickUpper) = _range(rangeSeed);
         r.liquidity = int256(clampBetween(liquidity, 1e15, MAX_LIQUIDITY));
         (r.useTrusted, r.hookData) = _route(routeMode, address(uint160(poolSeed >> 8)));
-        uint256 hold = (orchestrator.getPoolEnabledBlocks(poolKeys[idx].toId()) & JIT_BITS) != 0 ? ghosts.minHold[idx] : 0;
+        uint256 hold =
+            (orchestrator.getPoolEnabledBlocks(poolKeys[idx].toId()) & JIT_BITS) != 0 ? ghosts.minHold[idx] : 0;
         if (hold * BLOCK_INTERVAL > MAX_RT_HOLD_SECONDS) return;
         r.salt = keccak256(abi.encode("rt", actor, ghosts.rtNonce++));
         r.b0 = _currencyBalance(poolKeys[idx].currency0, actor);
@@ -250,7 +251,10 @@ abstract contract PoolManagerHandler is Properties {
         snapshotAfter();
 
         property_SP29_lpRoundTrip(
-            r.b0, _currencyBalance(poolKeys[idx].currency0, actor), r.b1, _currencyBalance(poolKeys[idx].currency1, actor)
+            r.b0,
+            _currencyBalance(poolKeys[idx].currency0, actor),
+            r.b1,
+            _currencyBalance(poolKeys[idx].currency1, actor)
         );
     }
 
@@ -286,7 +290,9 @@ abstract contract PoolManagerHandler is Properties {
         bool useTrustedRouter,
         bytes memory hookData
     ) public tracked {
-        _modifyLiquidityChecked(_poolIdx(poolIdx), tickLower, tickUpper, liquidityDelta, useTrustedRouter, hookData, false);
+        _modifyLiquidityChecked(
+            _poolIdx(poolIdx), tickLower, tickUpper, liquidityDelta, useTrustedRouter, hookData, false
+        );
     }
 
     function pool_donate(uint256 poolIdx, uint256 amount0, uint256 amount1) public tracked asActor {
@@ -350,9 +356,7 @@ abstract contract PoolManagerHandler is Properties {
         uint16 maxBps = ghosts.vestingMaxBps[c.idx];
         if (maxBps == 0 || maxBps >= 10_000) return;
         uint256 balAfter = _currencyBalance(project, actor);
-        uint256 sold = c.amountSpecified < 0
-            ? uint256(-c.amountSpecified)
-            : (c.bal1 > balAfter ? c.bal1 - balAfter : 0);
+        uint256 sold = c.amountSpecified < 0 ? uint256(-c.amountSpecified) : (c.bal1 > balAfter ? c.bal1 - balAfter : 0);
         if (sold == 0) return;
         uint256 epoch = block.timestamp / 1 days;
         if (ghosts.epochStartBal[pid][actor][epoch] == 0) ghosts.epochStartBal[pid][actor][epoch] = c.bal1 + sold;
@@ -430,9 +434,7 @@ abstract contract PoolManagerHandler is Properties {
         uint256 prevTouch = ghosts.lastOracleTouch[idx];
         address user = _resolvedUser(useTrusted, hookData);
         bytes32 salt = _positionSalt(actor);
-        _setCallContext(
-            liquidityDelta > 0 ? CallKind.ADD_LIQUIDITY : CallKind.REMOVE_LIQUIDITY, actor, idx, address(0)
-        );
+        _setCallContext(liquidityDelta > 0 ? CallKind.ADD_LIQUIDITY : CallKind.REMOVE_LIQUIDITY, actor, idx, address(0));
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: liquidityDelta, salt: salt
         });
@@ -454,7 +456,9 @@ abstract contract PoolManagerHandler is Properties {
         if (liquidityDelta > 0) {
             property_SP15_accessControlNoSpoof(idx, true);
         } else {
-            property_SP16_jitHoldNoBypass(idx, Position.calculatePositionKey(address(router), tickLower, tickUpper, salt));
+            property_SP16_jitHoldNoBypass(
+                idx, Position.calculatePositionKey(address(router), tickLower, tickUpper, salt)
+            );
         }
         property_SP20_oracleCheckpointLiveness(idx, prevTouch);
     }

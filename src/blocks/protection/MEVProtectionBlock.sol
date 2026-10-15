@@ -53,8 +53,7 @@ abstract contract MEVProtectionBlock is JITGuardBlock {
 
     function _initMEVProtection(PoolId poolId, MEVProtectionParams calldata params) internal {
         if (
-            params.maxTickDeltaPerSwap < 0
-                || (params.maxTickDeltaPerSwap > 0 && params.maxTickDeltaPerSwap < 10)
+            params.maxTickDeltaPerSwap < 0 || (params.maxTickDeltaPerSwap > 0 && params.maxTickDeltaPerSwap < 10)
                 || params.maxTickDeltaPerSwap > 887_272
         ) {
             revert InvalidMEVProtectionConfig(params.maxTickDeltaPerSwap);

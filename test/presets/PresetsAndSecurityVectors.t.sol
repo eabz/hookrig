@@ -457,39 +457,24 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
 
         cfg.dynamicFee = IHookRigBlock.DynamicFeeParams({baseFee: 2000, maxFee: 10_000, volatilityTickThreshold: 50});
         cfg.antiSnipe = IHookRigBlock.AntiSnipeParams({launchFee: 30_000, normalFee: 2000, decayBlocks: 10});
-        cfg.mevProtection = IHookRigBlock.MEVProtectionParams({
-            maxTickDeltaPerSwap: 500,
-            minLPHoldBlocks: 2,
-            jitExitPenaltyBps: 100
-        });
+        cfg.mevProtection =
+            IHookRigBlock.MEVProtectionParams({maxTickDeltaPerSwap: 500, minLPHoldBlocks: 2, jitExitPenaltyBps: 100});
         cfg.arbRecapture = IHookRigBlock.ArbRecaptureParams({recaptureShareBps: 1000, arbTriggerTickDelta: 10});
         cfg.walletCap = IHookRigBlock.WalletCapParams({maxWalletBps: 5000, sunsetBlocks: 100});
-        cfg.buySellTax = IHookRigBlock.BuySellTaxParams({
-            buyTaxBps: 100,
-            sellTaxBps: 100,
-            taxRecipient: treasury,
-            decayOnly: true
-        });
+        cfg.buySellTax =
+            IHookRigBlock.BuySellTaxParams({buyTaxBps: 100, sellTaxBps: 100, taxRecipient: treasury, decayOnly: true});
         cfg.autoBurn = IHookRigBlock.AutoBurnParams({burnOnBuyBps: 100, useTokenBurnCall: true});
         cfg.feeSharing = IHookRigBlock.FeeSharingParams({
-            feeShareBps: 100,
-            primaryRecipient: treasury,
-            secondaryRecipient: charity,
-            secondaryShareBps: 5000
+            feeShareBps: 100, primaryRecipient: treasury, secondaryRecipient: charity, secondaryShareBps: 5000
         });
         cfg.lpRewards = IHookRigBlock.LPRewardsParams({extraBuyFeeBps: 100});
         cfg.swapRewards = IHookRigBlock.SwapRewardsParams({pointsPerUnitVolume: 1e18});
         cfg.kingOfThePool = IHookRigBlock.KingOfThePoolParams({
-            potFeeOnBuyBps: 100,
-            roundDurationSeconds: 600,
-            minBuyAmountForReset: 10 ether
+            potFeeOnBuyBps: 100, roundDurationSeconds: 600, minBuyAmountForReset: 10 ether
         });
         cfg.referralSplit = IHookRigBlock.ReferralSplitParams({referralFeeBps: 100});
-        cfg.autoBuyback = IHookRigBlock.AutoBuybackParams({
-            buybackFeeBps: 100,
-            triggerFloorTick: -5,
-            minBuybackReserve: 1 ether
-        });
+        cfg.autoBuyback =
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 100, triggerFloorTick: -5, minBuybackReserve: 1 ether});
 
         (PoolKey memory key, PoolId poolId) = _initPoolWithStack(cfg);
         _seedFullRangeLiquidity(key, 1_000_000 ether);
@@ -527,11 +512,7 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         // 2. Valid combination: MarketHoursFee + AntiSnipe
         cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_MARKET_HOURS_FEE | HookPermissionMasks.BIT_ANTI_SNIPE;
         cfg.marketHoursFee = IHookRigBlock.MarketHoursFeeParams({
-            openHourUtc: 13,
-            closeHourUtc: 20,
-            openFee: 1500,
-            closedFee: 4000,
-            weekendClosed: true
+            openHourUtc: 13, closeHourUtc: 20, openFee: 1500, closedFee: 4000, weekendClosed: true
         });
         cfg.antiSnipe = IHookRigBlock.AntiSnipeParams({launchFee: 50_000, normalFee: 1000, decayBlocks: 10});
 
@@ -572,11 +553,7 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
 
         // Mismatched PoolKey reverts with OrderPoolKeyMismatch
         PoolKey memory wrongKey = PoolKey({
-            currency0: key.currency0,
-            currency1: key.currency1,
-            fee: key.fee,
-            tickSpacing: 120,
-            hooks: key.hooks
+            currency0: key.currency0, currency1: key.currency1, fee: key.fee, tickSpacing: 120, hooks: key.hooks
         });
         vm.prank(alice);
         vm.expectRevert(LimitOrdersLogic.OrderPoolKeyMismatch.selector);
@@ -594,11 +571,8 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
     function test_AntiFreeze02_AutoBuyback_MultiSwapReserveBurnAndZeroLiqSafety() public {
         IHookRigBlock.PoolStackConfig memory cfg;
         cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_AUTO_BUYBACK;
-        cfg.autoBuyback = IHookRigBlock.AutoBuybackParams({
-            buybackFeeBps: 300,
-            triggerFloorTick: -10,
-            minBuybackReserve: 1 ether
-        });
+        cfg.autoBuyback =
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 300, triggerFloorTick: -10, minBuybackReserve: 1 ether});
 
         (PoolKey memory key, PoolId poolId) = _initPoolWithStack(cfg);
         _seedFullRangeLiquidity(key, 500_000 ether);
@@ -630,10 +604,7 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
             minLPHoldBlocks: type(uint32).max, // Attempt infinite LP lockup -> rejected at registration!
             jitExitPenaltyBps: 0
         });
-        cfg.circuitBreaker = IHookRigBlock.CircuitBreakerParams({
-            maxWindowTickDeviation: 20,
-            windowSeconds: 300
-        });
+        cfg.circuitBreaker = IHookRigBlock.CircuitBreakerParams({maxWindowTickDeviation: 20, windowSeconds: 300});
 
         PoolKey memory badKey = _defaultPoolKey(IHooks(address(orchestrator)));
         vm.expectRevert();
@@ -661,9 +632,7 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         vm.prank(alice);
         router.modifyLiquidity(
             key,
-            ModifyLiquidityParams({
-                tickLower: -6000, tickUpper: 6000, liquidityDelta: -50_000 ether, salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -50_000 ether, salt: bytes32(0)}),
             ""
         );
 

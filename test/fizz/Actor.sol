@@ -13,9 +13,7 @@ contract ForceSendETH {
 
 /// @notice Represents an actor interacting with the system
 contract Actor {
-    constructor() payable {
-        
-    }
+    constructor() payable {}
 
     receive() external payable {}
 

@@ -191,13 +191,18 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         returns (uint256 quoteOut)
     {
         if (launchState != LaunchState.ActiveBonding) revert CurveNotActive();
-        if (tokenAmountIn == 0 || tokenAmountIn > curveTokensSold || realQuoteRaised == 0) revert ZeroAmount();
+        if (tokenAmountIn == 0 || tokenAmountIn > curveTokensSold) revert ZeroAmount();
         if (recipient == address(0)) recipient = msg.sender;
 
         IERC20(projectToken).safeTransferFrom(msg.sender, address(this), tokenAmountIn);
 
+        uint256 baseRedemption =
+            Math.mulDiv(tokenAmountIn, uint256(trancheConfig.basePriceQ96), uint256(1) << 96, Math.Rounding.Floor);
         uint256 proRataCap = Math.mulDiv(realQuoteRaised, tokenAmountIn, curveTokensSold, Math.Rounding.Floor);
-        quoteOut = proRataCap > realQuoteRaised ? realQuoteRaised : proRataCap;
+        quoteOut = baseRedemption < proRataCap ? baseRedemption : proRataCap;
+        if (quoteOut > realQuoteRaised) {
+            quoteOut = realQuoteRaised;
+        }
         if (quoteOut < minQuoteOut) {
             revert SlippageExceeded(quoteOut, minQuoteOut);
         }
@@ -205,7 +210,9 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         realQuoteRaised -= quoteOut;
         curveTokensSold -= tokenAmountIn;
 
-        quoteCurrency.transfer(recipient, quoteOut);
+        if (quoteOut > 0) {
+            quoteCurrency.transfer(recipient, quoteOut);
+        }
 
         emit CurveSell(msg.sender, tokenAmountIn, quoteOut, realQuoteRaised);
     }

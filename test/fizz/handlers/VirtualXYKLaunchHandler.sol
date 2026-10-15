@@ -116,7 +116,7 @@ abstract contract VirtualXYKLaunchHandler is Properties {
         bool liveness
     ) internal {
         uint256 i = _poolIdxOfCurve(address(curve));
-        (bytes4 err, ) = _xykBuy(curve, quoteAmountIn, minTokensOut, recipient, liveness);
+        (bytes4 err,) = _xykBuy(curve, quoteAmountIn, minTokensOut, recipient, liveness);
         bytes4 walletCapSel = VirtualXYKLaunch.WalletCapExceededOnCurve.selector;
         if (err != bytes4(0)) {
             property_SP07_graduationLiveness(true, err, walletCapSel, address(curve), i);
@@ -227,7 +227,7 @@ abstract contract VirtualXYKLaunchHandler is Properties {
         o.alloc = alloc;
         o.payerDebit = _currencyBalance(curve.quoteCurrency(), actor);
         o.recipientCredit = _currencyBalance(Currency.wrap(curve.projectToken()), recipient);
-        o.checkCredit = recipient != address(curve);
+        o.checkCredit = recipient != address(curve) && recipient != address(poolManager);
     }
 
     /// @notice Fills the before (`isBefore`) or after half of a curve round-trip record for `actor`.

@@ -43,7 +43,7 @@ interface IERC20 {
 }
 
 /// @notice This is a mock contract of the ERC20 standard for testing purposes only, it SHOULD NOT be used in production.
-/// @notice Includes open deal function to mint tokens to any address. 
+/// @notice Includes open deal function to mint tokens to any address.
 /// @dev Forked from: https://github.com/transmissions11/solmate/blob/0384dbaaa4fcb5715738a9254a7c0a4cb62cf458/src/tokens/ERC20.sol
 contract MockERC20 is IERC20 {
     /*//////////////////////////////////////////////////////////////
@@ -111,8 +111,8 @@ contract MockERC20 is IERC20 {
 
         INITIAL_CHAIN_ID = _pureChainId();
         INITIAL_DOMAIN_SEPARATOR = computeDomainSeparator();
-        
-		_mint(recipient, mintAmount * 10 ** decimals);
+
+        _mint(recipient, mintAmount * 10 ** decimals);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -150,10 +150,10 @@ contract MockERC20 is IERC20 {
     }
 
     /*//////////////////////////////////////////////////////////////
-							 DEAL LOGIC
+    			 DEAL LOGIC
     //////////////////////////////////////////////////////////////*/
 
-	function deal(uint256 amount) public virtual {
+    function deal(uint256 amount) public virtual {
         _mint(msg.sender, amount);
     }
 

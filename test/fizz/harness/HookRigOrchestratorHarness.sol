@@ -70,12 +70,7 @@ contract HookRigOrchestratorHarness is HookRigOrchestrator {
         return _computeAntiSnipeFee(poolId);
     }
 
-    function _beforeInitialize(address sender, PoolKey calldata key, uint160)
-        internal
-        view
-        override
-        returns (bytes4)
-    {
+    function _beforeInitialize(address sender, PoolKey calldata key, uint160) internal view override returns (bytes4) {
         PoolId poolId = key.toId();
         PoolRuntimeMeta storage meta = _poolMeta[poolId];
         if (meta.isLaunchpadPool && sender != meta.authorizedCurve && sender != launchpadFactory) {

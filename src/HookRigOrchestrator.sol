@@ -97,7 +97,10 @@ contract HookRigOrchestrator is
         if (isLaunchpad && msg.sender != launchpadFactory) {
             revert OnlyLaunchpadFactory(msg.sender);
         }
-        if (!isLaunchpad && config.poolAdmin != address(0) && msg.sender != config.poolAdmin && msg.sender != launchpadFactory) {
+        if (
+            !isLaunchpad && config.poolAdmin != address(0) && msg.sender != config.poolAdmin
+                && msg.sender != launchpadFactory
+        ) {
             revert OnlyPoolAdmin(msg.sender);
         }
         _configurePoolStackInternal(key, poolId, config, isLaunchpad, config.authorizedCurve);
@@ -236,6 +239,7 @@ contract HookRigOrchestrator is
         if (msg.sender != meta.poolAdmin) revert OnlyPoolAdmin(msg.sender);
 
         uint32 bitmap = meta.enabledBlocksBitmap;
+        if ((bitmap & HookPermissionMasks.BIT_BUY_SELL_TAX) == 0) revert PoolNotConfigured(poolId);
         uint256 otherBuyBps = _protocolRoyaltyBps();
         uint256 otherSellBps = _protocolRoyaltyBps();
 
@@ -493,9 +497,8 @@ contract HookRigOrchestrator is
         }
 
         if ((bitmap & HookPermissionMasks.BIT_SWAP_REWARDS) != 0) {
-            uint256 netRewardVolume = ctx.grossUnspecifiedAmount > totalCutAmount
-                ? ctx.grossUnspecifiedAmount - totalCutAmount
-                : 0;
+            uint256 netRewardVolume =
+                ctx.grossUnspecifiedAmount > totalCutAmount ? ctx.grossUnspecifiedAmount - totalCutAmount : 0;
             _accrueSwapRewards(poolId, ctx.trader, netRewardVolume);
         }
 

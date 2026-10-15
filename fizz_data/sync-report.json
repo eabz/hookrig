@@ -1,0 +1,403 @@
+{
+  "generatedAt": "2026-10-15T09:49:31.408Z",
+  "snapshotPath": "fizz_data/last-run.json",
+  "hasDrift": true,
+  "contracts": {
+    "added": [],
+    "removed": [],
+    "changed": [
+      {
+        "name": "HookRigOrchestrator",
+        "sourcePath": "src/HookRigOrchestrator.sol",
+        "functionsAdded": [
+          {
+            "signature": "cancelTWAMMOrder(PoolKey,uint256)",
+            "name": "cancelTWAMMOrder",
+            "tier": "primary",
+            "handlerMethodName": "hookRigOrchestrator_cancelTWAMMOrder"
+          },
+          {
+            "signature": "setBuySellTax(PoolId,uint16,uint16,address)",
+            "name": "setBuySellTax",
+            "tier": "primary",
+            "handlerMethodName": "hookRigOrchestrator_setBuySellTax"
+          }
+        ],
+        "functionsRemoved": [],
+        "functionsChanged": [],
+        "tierChanged": []
+      }
+    ],
+    "sourcesChanged": [
+      {
+        "name": "HookRigOrchestrator",
+        "sourcePath": "src/HookRigOrchestrator.sol"
+      },
+      {
+        "name": "LaunchpadFactory",
+        "sourcePath": "src/launchpad/LaunchpadFactory.sol"
+      },
+      {
+        "name": "SteppedTrancheLaunch",
+        "sourcePath": "src/launchpad/curves/SteppedTrancheLaunch.sol"
+      },
+      {
+        "name": "VirtualXYKLaunch",
+        "sourcePath": "src/launchpad/curves/VirtualXYKLaunch.sol"
+      }
+    ]
+  },
+  "handlers": {
+    "orphan": [],
+    "modified": [
+      {
+        "file": "HookRigTokenHandler.sol"
+      },
+      {
+        "file": "PoolManagerHandler.sol"
+      }
+    ],
+    "missing": []
+  },
+  "properties": {
+    "referencingRemoved": [],
+    "fromSnapshot": [
+      {
+        "id": "GL-01",
+        "checkbox": "x",
+        "functionName": "property_GL01_claimSolvency",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-02",
+        "checkbox": "x",
+        "functionName": "property_GL02_fullBacking",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-03",
+        "checkbox": "x",
+        "functionName": "property_GL03_kingPotCurrencyPurity",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-04",
+        "checkbox": "x",
+        "functionName": "property_GL04_limitOrderEscrow",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-05",
+        "checkbox": "x",
+        "functionName": "property_GL05_curveQuoteBacking",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-06",
+        "checkbox": "x",
+        "functionName": "property_GL06_claimsPullOnly",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-07",
+        "checkbox": "x",
+        "functionName": "property_GL07_bitmapLocked",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-08",
+        "checkbox": "x",
+        "functionName": "property_GL08_kingRoundTransitions",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-09",
+        "checkbox": "x",
+        "functionName": "property_GL09_launchLifecycle",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-10",
+        "checkbox": "x",
+        "functionName": "property_GL10_atomicGraduation",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-11",
+        "checkbox": "x",
+        "functionName": "property_GL11_graduationPriceContinuity",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-12",
+        "checkbox": "x",
+        "functionName": "property_GL12_xykProductNonDecreasing",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-13",
+        "checkbox": "x",
+        "functionName": "property_GL13_xykTokenIdentity",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-14",
+        "checkbox": "x",
+        "functionName": "property_GL14_xykQuoteIdentity",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-15",
+        "checkbox": "x",
+        "functionName": "property_GL15_trancheScheduleFloor",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-16",
+        "checkbox": "x",
+        "functionName": "_updateOrderTickRanges",
+        "file": "test/fizz/handlers/PoolManagerHandler.sol"
+      },
+      {
+        "id": "GL-17",
+        "checkbox": "x",
+        "functionName": "property_GL17_twammBounded",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-18",
+        "checkbox": "x",
+        "functionName": "property_GL18_antiSnipeNotRearmed",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-19",
+        "checkbox": "x",
+        "functionName": "property_GL19_oracleBounds",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-20",
+        "checkbox": "x",
+        "functionName": "property_GL20_limitBucketSum",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-21",
+        "checkbox": "x",
+        "functionName": "property_GL21_bitmapGatedState",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-22",
+        "checkbox": "x",
+        "functionName": "property_GL22_permissionedChanges",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-23",
+        "checkbox": "x",
+        "functionName": "property_GL23_curveTokenAccounting",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-24",
+        "checkbox": "x",
+        "functionName": "property_GL24_autoBurnLedger",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-25",
+        "checkbox": "x",
+        "functionName": "property_GL25_reasonableBuyNonZero",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "GL-26",
+        "checkbox": "x",
+        "functionName": "property_GL26_noStrandedCurveValue",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-01",
+        "checkbox": "x",
+        "functionName": "property_SP01_fullWithdrawLive",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-02",
+        "checkbox": "x",
+        "functionName": "property_SP02_winnerClaimLive",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-03",
+        "checkbox": "x",
+        "functionName": "property_SP03_honestSettleRevert",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-04",
+        "checkbox": "x",
+        "functionName": "property_SP04_swapRoundTrip",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-05",
+        "checkbox": "x",
+        "functionName": "property_SP05_curveRoundTrip",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-06",
+        "checkbox": "x",
+        "functionName": "property_SP06_curveDustCycle",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-07",
+        "checkbox": "x",
+        "functionName": "property_SP07_graduationLiveness",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-08",
+        "checkbox": "x",
+        "functionName": "property_SP08_graduationPostconditions",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-09",
+        "checkbox": "x",
+        "functionName": "property_SP09_swapDeltaIdentity",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-10",
+        "checkbox": "x",
+        "functionName": "property_SP10_aggregateCutCap",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-11",
+        "checkbox": "x",
+        "functionName": "property_SP11_exactOutputCeil",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-12",
+        "checkbox": "x",
+        "functionName": "property_SP12_xykSellModel",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-13",
+        "checkbox": "x",
+        "functionName": "property_SP13_trancheSellModel",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-14",
+        "checkbox": "x",
+        "functionName": "property_SP14_swapIsolation",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-15",
+        "checkbox": "x",
+        "functionName": "property_SP15_accessControlNoSpoof",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-16",
+        "checkbox": "x",
+        "functionName": "property_SP16_jitHoldNoBypass",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-17",
+        "checkbox": "x",
+        "functionName": "property_SP17_vestingCapNoBypass",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-18",
+        "checkbox": "x",
+        "functionName": "property_SP18_vestingCapNoGrief",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-19",
+        "checkbox": "x",
+        "functionName": "property_SP19_noRetroRegistration",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-20",
+        "checkbox": "x",
+        "functionName": "property_SP20_oracleCheckpointLiveness",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-21",
+        "checkbox": "x",
+        "functionName": "property_SP21_lpExitLiveness",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-22",
+        "checkbox": "x",
+        "functionName": "property_SP22_curveExitLiveness",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-23",
+        "checkbox": "x",
+        "functionName": "hookRigOrchestrator_unauthorizedCurveCalls",
+        "file": "test/fizz/handlers/HookRigOrchestratorHandler.sol"
+      },
+      {
+        "id": "SP-24",
+        "checkbox": "x",
+        "functionName": "pool_jitBuybackSnipe",
+        "file": "test/fizz/handlers/PoolManagerHandler.sol"
+      },
+      {
+        "id": "SP-25",
+        "checkbox": "x",
+        "functionName": "property_SP25_walletCapNoBypass",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-26",
+        "checkbox": "x",
+        "functionName": "_recordLaunchCuts",
+        "file": "test/fizz/handlers/LaunchpadFactoryHandler.sol"
+      },
+      {
+        "id": "SP-27",
+        "checkbox": "x",
+        "functionName": "property_SP27_noUndeliveredChargeTranche",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-28",
+        "checkbox": "x",
+        "functionName": "property_SP28_filledOrderPaysOutput",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-29",
+        "checkbox": "x",
+        "functionName": "property_SP29_lpRoundTrip",
+        "file": "test/fizz/Properties.sol"
+      },
+      {
+        "id": "SP-30",
+        "checkbox": "x",
+        "functionName": "hookRigOrchestrator_accumulatorGrief",
+        "file": "test/fizz/handlers/HookRigOrchestratorHandler.sol"
+      }
+    ]
+  }
+}

@@ -53,9 +53,8 @@ library ArbRecaptureLogic {
         int256 swapTickMoved = postSwapTick >= preSwapTick
             ? int256(postSwapTick) - int256(preSwapTick)
             : int256(preSwapTick) - int256(postSwapTick);
-        int256 refTickMoved = postSwapTick >= refTick
-            ? int256(postSwapTick) - int256(refTick)
-            : int256(refTick) - int256(postSwapTick);
+        int256 refTickMoved =
+            postSwapTick >= refTick ? int256(postSwapTick) - int256(refTick) : int256(refTick) - int256(postSwapTick);
         int256 tickMoved = refTickMoved > swapTickMoved ? refTickMoved : swapTickMoved;
 
         if (tickMoved <= int256(state.arbTriggerTickDelta)) {

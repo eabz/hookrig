@@ -37,6 +37,7 @@ contract LaunchpadDeployer {
 
     /// @notice RLP-encoded CREATE address for nonces in [1, 0x7f].
     function _createAddress(address deployer, uint8 nonce) private pure returns (address) {
-        return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xd6), bytes1(0x94), deployer, bytes1(nonce))))));
+        return
+            address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xd6), bytes1(0x94), deployer, bytes1(nonce))))));
     }
 }

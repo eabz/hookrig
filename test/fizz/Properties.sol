@@ -270,7 +270,11 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
         for (uint256 x; x < trancheCurves.length; x++) {
             SteppedTrancheLaunch curve = trancheCurves[x];
             uint256 paidQ96 = (curve.realQuoteRaised() + ghosts.trancheBuys[address(curve)]) << 96;
-            gte(paidQ96, _trancheCost(curve, curve.curveTokensSold()), "GL-15: tranche buys paid below the price schedule");
+            gte(
+                paidQ96,
+                _trancheCost(curve, curve.curveTokensSold()),
+                "GL-15: tranche buys paid below the price schedule"
+            );
         }
     }
 
@@ -299,7 +303,7 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
         uint256[] memory rate1 = new uint256[](nP);
         for (uint256 o; o < ghosts.twammOrders.length; o++) {
             TwammOrder storage order = ghosts.twammOrders[o];
-            if (order.poolIdx >= nP || order.expiry <= block.timestamp) continue;
+            if (order.cancelled || order.poolIdx >= nP || order.expiry <= block.timestamp) continue;
             if (order.zeroForOne) rate0[order.poolIdx] += order.rate;
             else rate1[order.poolIdx] += order.rate;
         }
@@ -307,7 +311,9 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
             PoolId pid = poolKeys[i].toId();
             TWAMMLogic.TWAMMState memory st = orchestrator.twammState(pid);
             lte(st.accruedVirtualVolume0, ghosts.twammSubmitted[pid][true], "GL-17: TWAMM volume0 streamed > submitted");
-            lte(st.accruedVirtualVolume1, ghosts.twammSubmitted[pid][false], "GL-17: TWAMM volume1 streamed > submitted");
+            lte(
+                st.accruedVirtualVolume1, ghosts.twammSubmitted[pid][false], "GL-17: TWAMM volume1 streamed > submitted"
+            );
             eq(st.sellRate0For1, rate0[i], "GL-17: sellRate0For1 != sum of unexpired order rates");
             eq(st.sellRate1For0, rate1[i], "GL-17: sellRate1For0 != sum of unexpired order rates");
         }
@@ -408,8 +414,16 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
 
             if (bm == 0) {
                 for (uint256 a; a < claimants.length; a++) {
-                    eq(orchestrator.poolClaims(pid, key.currency0, claimants[a]), 0, "GL-21: claims on unregistered pool");
-                    eq(orchestrator.poolClaims(pid, key.currency1, claimants[a]), 0, "GL-21: claims on unregistered pool");
+                    eq(
+                        orchestrator.poolClaims(pid, key.currency0, claimants[a]),
+                        0,
+                        "GL-21: claims on unregistered pool"
+                    );
+                    eq(
+                        orchestrator.poolClaims(pid, key.currency1, claimants[a]),
+                        0,
+                        "GL-21: claims on unregistered pool"
+                    );
                 }
                 eq(round, 0, "GL-21: King round on unregistered pool");
                 t(king == address(0), "GL-21: king on unregistered pool");
@@ -471,7 +485,9 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
                 ghosts.initialCurveSupply[curve] + ghosts.tokensDonatedToCurve[curve],
                 "GL-23: curve project balance != launch supply - sold + donated"
             );
-            if (sold <= alloc) gte(bal, (alloc - sold) + lp, "GL-23: curve cannot cover unsold allocation + LP reserve");
+            if (sold <= alloc) {
+                gte(bal, (alloc - sold) + lp, "GL-23: curve cannot cover unsold allocation + LP reserve");
+            }
         }
     }
 
@@ -483,7 +499,9 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
             Currency currency = trackedCurrencies[c];
             uint256 burnedSum;
             for (uint256 i; i < poolKeys.length; i++) {
-                if (poolKeys[i].currency1 == currency) burnedSum += orchestrator.totalAutoBurnedByPool(poolKeys[i].toId());
+                if (poolKeys[i].currency1 == currency) {
+                    burnedSum += orchestrator.totalAutoBurnedByPool(poolKeys[i].toId());
+                }
             }
             uint256 supply = _tryUint(Currency.unwrap(currency), "totalSupply()");
             uint256 dead = _currencyBalance(currency, DEAD);
@@ -520,8 +538,16 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
             if (curve == address(0) || kind == CURVE_OTHER || _launchState(curve) != LS_GRADUATED) continue;
             (,, uint256 lp) = _curveTargets(curve, kind);
             uint256 rqr = _tryUint(curve, "realQuoteRaised()");
-            lte(_currencyBalance(poolKeys[i].currency1, curve), lp / 10_000 + 1, "GL-26: project tokens stranded in graduated curve");
-            lte(_currencyBalance(poolKeys[i].currency0, curve), rqr / 10_000 + 1, "GL-26: quote stranded in graduated curve");
+            lte(
+                _currencyBalance(poolKeys[i].currency1, curve),
+                lp / 10_000 + 1,
+                "GL-26: project tokens stranded in graduated curve"
+            );
+            lte(
+                _currencyBalance(poolKeys[i].currency0, curve),
+                rqr / 10_000 + 1,
+                "GL-26: quote stranded in graduated curve"
+            );
         }
     }
 
@@ -663,7 +689,11 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
     function property_SP02_kingPayoutExact(KingClaimObs memory k) internal {
         t(k.caller == k.settled.winner, "SP-02: King pot claimed by someone other than the round winner");
         t(!k.settled.claimed && !k.ghostClaimed, "SP-02: King round paid out twice");
-        eq(k.cur6909After + k.settled.amount, k.cur6909Before, "SP-02: hook ERC-6909 did not fall by the settled amount");
+        eq(
+            k.cur6909After + k.settled.amount,
+            k.cur6909Before,
+            "SP-02: hook ERC-6909 did not fall by the settled amount"
+        );
         if (k.to != address(poolManager)) {
             eq(k.toAfter, k.toBefore + k.settled.amount, "SP-02: King payout recipient not paid the settled amount");
         }
@@ -776,15 +806,17 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
         lte(w, (net + w) * 2500 / 10_000, "SP-10: aggregate after-swap cut above floor(25% of gross)");
     }
 
-    /// @notice SP-11: on a POOL_XYK exact-output sell the tax slice is ceilDiv(grossIn * 100, 1e4)
+    /// @notice SP-11: on a POOL_XYK exact-output sell the tax slice is ceilDiv(grossIn * sellTaxBps, 1e4)
     function property_SP11_exactOutputCeil(uint256 projectPaid) internal {
+        uint256 sellBps = ghosts.cfgBps[POOL_XYK][1];
+        if (sellBps == 0) return;
         uint256 taxIdx = _claimantIdx(actors[1]);
         uint256 b = _snapClaim(stateBefore, POOL_XYK, 1, taxIdx);
         uint256 a = _snapClaim(stateAfter, POOL_XYK, 1, taxIdx);
         if (a < b || projectPaid < a - b) return;
         uint256 withheld = a - b;
         uint256 grossIn = projectPaid - withheld;
-        eq(withheld, (grossIn * 100 + 9999) / 10_000, "SP-11: exact-output sell tax not rounded up (Ceil)");
+        eq(withheld, (grossIn * sellBps + 9999) / 10_000, "SP-11: exact-output sell tax not rounded up (Ceil)");
     }
 
     /// @notice SP-12: a VirtualXYK buy charges min(qIn, target - rqr) and pays min(Y - ceil(k / (X + used)), alloc - sold)
@@ -919,14 +951,18 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
         Currency proj = poolKeys[i].currency1;
         uint256 supply = _tryUint(Currency.unwrap(proj), "totalSupply()");
         if (supply == 0) return;
-        lte(_currencyBalance(proj, actor), (supply * cfg.maxWalletBps) / 10_000, "SP-25: actor above WalletCap after a buy");
+        lte(
+            _currencyBalance(proj, actor),
+            (supply * cfg.maxWalletBps) / 10_000,
+            "SP-25: actor above WalletCap after a buy"
+        );
     }
 
     /// @notice SP-26: claims credited by an exact-input swap are at most the floored tax + fee-share + referral slices
     function property_SP26_claimSlicesFloored(uint256 i, uint256 uSide, uint256 gross, bool isBuy) internal {
         uint16[4] memory bps = ghosts.cfgBps[i];
-        uint256 bound = (gross * (isBuy ? bps[0] : bps[1])) / 10_000 + (gross * bps[2]) / 10_000
-            + (gross * bps[3]) / 10_000;
+        uint256 bound =
+            (gross * (isBuy ? bps[0] : bps[1])) / 10_000 + (gross * bps[2]) / 10_000 + (gross * bps[3]) / 10_000;
         lte(uint256(_claimsDelta(i, uSide)), bound, "SP-26: claims credited above the floored claim slices");
         if (i != POOL_MULTI) return;
         uint256 tIdx = _claimantIdx(TREASURY);
@@ -1117,7 +1153,8 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
             uint256 potIdx = _currencyIdx(ks.potCurrency);
             if (ks.currentPotAmount > 0 && potIdx < nC) fullSum[potIdx] += ks.currentPotAmount;
 
-            uint64 lowest = ks.currentRoundId > MAX_KING_ROUNDS_SCAN ? uint64(ks.currentRoundId - MAX_KING_ROUNDS_SCAN) : 1;
+            uint64 lowest =
+                ks.currentRoundId > MAX_KING_ROUNDS_SCAN ? uint64(ks.currentRoundId - MAX_KING_ROUNDS_SCAN) : 1;
             for (uint64 r = lowest; r < ks.currentRoundId; r++) {
                 KingOfThePoolLogic.SettledKingRound memory settled = orchestrator.settledKingRound(pid, r);
                 if (settled.claimed || settled.amount == 0) continue;

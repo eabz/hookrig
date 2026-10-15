@@ -25,14 +25,7 @@ contract PropertiesAsserts is StringUtils {
         if (a != b) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                "!=",
-                bStr,
-                ", reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, "!=", bStr, ", reason: ", reason);
             emit AssertEqFail(string(assertMsg));
             assert(false);
         }
@@ -43,14 +36,7 @@ contract PropertiesAsserts is StringUtils {
         if (a != b) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                "!=",
-                bStr,
-                ", reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, "!=", bStr, ", reason: ", reason);
             emit AssertEqFail(string(assertMsg));
             assert(false);
         }
@@ -61,14 +47,7 @@ contract PropertiesAsserts is StringUtils {
         if (a == b) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                "==",
-                bStr,
-                ", reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, "==", bStr, ", reason: ", reason);
             emit AssertNeqFail(string(assertMsg));
             assert(false);
         }
@@ -79,14 +58,7 @@ contract PropertiesAsserts is StringUtils {
         if (a == b) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                "==",
-                bStr,
-                ", reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, "==", bStr, ", reason: ", reason);
             emit AssertNeqFail(string(assertMsg));
             assert(false);
         }
@@ -97,14 +69,7 @@ contract PropertiesAsserts is StringUtils {
         if (!(a >= b)) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                "<",
-                bStr,
-                " failed, reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, "<", bStr, " failed, reason: ", reason);
             emit AssertGteFail(string(assertMsg));
             assert(false);
         }
@@ -115,14 +80,7 @@ contract PropertiesAsserts is StringUtils {
         if (!(a >= b)) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                "<",
-                bStr,
-                " failed, reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, "<", bStr, " failed, reason: ", reason);
             emit AssertGteFail(string(assertMsg));
             assert(false);
         }
@@ -133,14 +91,7 @@ contract PropertiesAsserts is StringUtils {
         if (!(a > b)) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                "<=",
-                bStr,
-                " failed, reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, "<=", bStr, " failed, reason: ", reason);
             emit AssertGtFail(string(assertMsg));
             assert(false);
         }
@@ -151,14 +102,7 @@ contract PropertiesAsserts is StringUtils {
         if (!(a > b)) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                "<=",
-                bStr,
-                " failed, reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, "<=", bStr, " failed, reason: ", reason);
             emit AssertGtFail(string(assertMsg));
             assert(false);
         }
@@ -169,14 +113,7 @@ contract PropertiesAsserts is StringUtils {
         if (!(a <= b)) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                ">",
-                bStr,
-                " failed, reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, ">", bStr, " failed, reason: ", reason);
             emit AssertLteFail(string(assertMsg));
             assert(false);
         }
@@ -187,14 +124,7 @@ contract PropertiesAsserts is StringUtils {
         if (!(a <= b)) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                ">",
-                bStr,
-                " failed, reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, ">", bStr, " failed, reason: ", reason);
             emit AssertLteFail(string(assertMsg));
             assert(false);
         }
@@ -205,14 +135,7 @@ contract PropertiesAsserts is StringUtils {
         if (!(a < b)) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                ">=",
-                bStr,
-                " failed, reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, ">=", bStr, " failed, reason: ", reason);
             emit AssertLtFail(string(assertMsg));
             assert(false);
         }
@@ -223,14 +146,7 @@ contract PropertiesAsserts is StringUtils {
         if (!(a < b)) {
             string memory aStr = toString(a);
             string memory bStr = toString(b);
-            bytes memory assertMsg = abi.encodePacked(
-                "Invalid: ",
-                aStr,
-                ">=",
-                bStr,
-                " failed, reason: ",
-                reason
-            );
+            bytes memory assertMsg = abi.encodePacked("Invalid: ", aStr, ">=", bStr, " failed, reason: ", reason);
             emit AssertLtFail(string(assertMsg));
             assert(false);
         }

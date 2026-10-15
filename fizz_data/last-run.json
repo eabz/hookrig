@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "createdAt": "2026-10-15T05:07:12.925Z",
+  "createdAt": "2026-10-15T11:41:51.814Z",
   "projectRoot": ".",
   "suiteDir": "test/fizz",
   "metaDir": "fizz_data",
@@ -8,7 +8,7 @@
     {
       "name": "HookRigOrchestrator",
       "sourcePath": "src/HookRigOrchestrator.sol",
-      "sourceHash": "sha256:cd19cc937750989d04cabccf11b252f6fc37c4dbf614c3dca87e6a0195bfdfd0",
+      "sourceHash": "sha256:b8716a085003e438d2201fee5a37e8fc5533a01e5306b218380e84c8c050aa68",
       "constructor": {
         "inputs": [
           {
@@ -361,6 +361,24 @@
           "signature": "cancelLimitOrder(PoolKey,uint256)"
         },
         {
+          "name": "cancelTWAMMOrder",
+          "inputs": [
+            {
+              "name": "key",
+              "type": "tuple",
+              "internalType": "PoolKey"
+            },
+            {
+              "name": "orderId",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "nonpayable",
+          "tier": "primary",
+          "signature": "cancelTWAMMOrder(PoolKey,uint256)"
+        },
+        {
           "name": "claimKingPot",
           "inputs": [
             {
@@ -451,7 +469,7 @@
               "internalType": "uint128"
             }
           ],
-          "stateMutability": "nonpayable",
+          "stateMutability": "payable",
           "tier": "primary",
           "signature": "placeLimitOrder(PoolKey,int24,bool,uint128)"
         },
@@ -563,6 +581,34 @@
           "signature": "setAllowlistAccount(PoolId,address,bool)"
         },
         {
+          "name": "setBuySellTax",
+          "inputs": [
+            {
+              "name": "poolId",
+              "type": "bytes32",
+              "internalType": "PoolId"
+            },
+            {
+              "name": "buyTaxBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "sellTaxBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "taxRecipient",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "stateMutability": "nonpayable",
+          "tier": "primary",
+          "signature": "setBuySellTax(PoolId,uint16,uint16,address)"
+        },
+        {
           "name": "setLaunchpadFactory",
           "inputs": [
             {
@@ -635,7 +681,7 @@
               "internalType": "uint64"
             }
           ],
-          "stateMutability": "nonpayable",
+          "stateMutability": "payable",
           "tier": "secondary",
           "signature": "submitTWAMMOrder(PoolKey,bool,uint128,uint64)"
         },
@@ -868,7 +914,7 @@
     {
       "name": "LaunchpadFactory",
       "sourcePath": "src/launchpad/LaunchpadFactory.sol",
-      "sourceHash": "sha256:5732da4186b4d8c53a76a5f6f24d07272a76d4c434a6c4ae666a3f2f9088df14",
+      "sourceHash": "sha256:fc784cb628dd61196e332f1c1d13677b4a091b1d3822dfdae27db94d9fc23b96",
       "constructor": {
         "inputs": [
           {
@@ -1029,7 +1075,7 @@
     {
       "name": "SteppedTrancheLaunch",
       "sourcePath": "src/launchpad/curves/SteppedTrancheLaunch.sol",
-      "sourceHash": "sha256:85b5485c0301122d794f2b37648465997787e3e4a1d67475e22ad717b889356a",
+      "sourceHash": "sha256:49cf60ea673380317d6b90a0a4a5aaf494053e4b3c6beca13d68ba5c06da3855",
       "constructor": {
         "inputs": [
           {
@@ -1138,7 +1184,7 @@
     {
       "name": "VirtualXYKLaunch",
       "sourcePath": "src/launchpad/curves/VirtualXYKLaunch.sol",
-      "sourceHash": "sha256:742aadf04b5fecf9907a0c2e19bfff33596e577caf73c37aada9595054b6bee8",
+      "sourceHash": "sha256:77d30efe691a9ef358a620dc6e350f0a44e87f6a133b88b8e0f9a49e742fecc9",
       "constructor": {
         "inputs": [
           {
@@ -1247,12 +1293,12 @@
   ],
   "handlers": {
     "Handlers.sol": "sha256:50a37dbc8d2b7949c6d95fc3df808106b5e5f88c9d3f775a0db166112b4af34c",
-    "HookRigOrchestratorHandler.sol": "sha256:810a9287a0cac2255d14e638b236b3ee9fa386f9824cd85f3b1a1a11ee9393c2",
-    "HookRigTokenHandler.sol": "sha256:c1f3fca5bfdc6e9da49e53c9aae68d5c1c4766663f9498afd98afb4951b31e63",
-    "LaunchpadFactoryHandler.sol": "sha256:907439ac209c92ce386abde6987033f143291e6adf60bdcb699fd14be5aed045",
-    "PoolManagerHandler.sol": "sha256:879202b079d8b6f25ce84bbe8f801c456af2c3fc8e3f0ee1cf1e0b3ccb8206f9",
-    "SteppedTrancheLaunchHandler.sol": "sha256:737d297bfc3b8b4dd26f56b5d9a6bed33de34bc45f1f6768a2ce0a91c181005a",
-    "VirtualXYKLaunchHandler.sol": "sha256:00cb493a996c00aa673d1d1860ed167a63c2f4588666288e0ecff8e8069f9b7b"
+    "HookRigOrchestratorHandler.sol": "sha256:aca2dc46cba8f0f19358ae46bd3bdb029a1cc068a8b384aadbb7442fe5056ee6",
+    "HookRigTokenHandler.sol": "sha256:b893cf5412cc99b63a0a6342a55f1fe17caba4562822a491a0d0e901cdc4894c",
+    "LaunchpadFactoryHandler.sol": "sha256:47355c213b7b3e46f59bae643f8b1b8167009dc4d6729657bfcf569dc8ccb53e",
+    "PoolManagerHandler.sol": "sha256:21fc193ab93ff259afb511892b65701bd64fed4cc3a42b22b522596271f8cd13",
+    "SteppedTrancheLaunchHandler.sol": "sha256:015ee84c12d62ffd07c9fb0343127af9fe8154389bc48d4f8a8d4e84d2b15b09",
+    "VirtualXYKLaunchHandler.sol": "sha256:90a36e1bfb20f4bbb4eba847c3b7e148e57f7bc9636bfa6c4541f9461a10c37d"
   },
   "properties": [
     {

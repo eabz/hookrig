@@ -56,7 +56,9 @@ contract HoodiSwapRouter is IUnlockCallback {
     {
         _currentSender = msg.sender;
         delta = abi.decode(
-            manager.unlock(abi.encode(SwapCallbackData({sender: msg.sender, key: key, params: params, hookData: hookData}))),
+            manager.unlock(
+                abi.encode(SwapCallbackData({sender: msg.sender, key: key, params: params, hookData: hookData}))
+            ),
             (BalanceDelta)
         );
         _currentSender = address(0);
@@ -150,9 +152,8 @@ contract HoodiIntegrationScript is Script {
         stackCfg.presetId = IHookRigBlock.PresetId.Blank;
         stackCfg.enabledBlocksBitmap = HookPermissionMasks.PRESET_FAIR_LAUNCH | HookPermissionMasks.BIT_KING_OF_THE_POOL
             | HookPermissionMasks.BIT_SWAP_REWARDS;
-        stackCfg.dynamicFee = IHookRigBlock.DynamicFeeParams({
-            baseFee: 3000, maxFee: 10_000, volatilityTickThreshold: 50
-        });
+        stackCfg.dynamicFee =
+            IHookRigBlock.DynamicFeeParams({baseFee: 3000, maxFee: 10_000, volatilityTickThreshold: 50});
         stackCfg.antiSnipe = IHookRigBlock.AntiSnipeParams({launchFee: 50_000, normalFee: 3000, decayBlocks: 20});
         stackCfg.walletCap = IHookRigBlock.WalletCapParams({maxWalletBps: 5000, sunsetBlocks: 500});
         stackCfg.autoBurn = IHookRigBlock.AutoBurnParams({burnOnBuyBps: 100, useTokenBurnCall: false});
@@ -164,9 +165,8 @@ contract HoodiIntegrationScript is Script {
     }
 
     function run() external {
-        uint256 deployerPrivateKey = vm.envOr(
-            "PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80)
-        );
+        uint256 deployerPrivateKey =
+            vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
         address deployer = vm.addr(deployerPrivateKey);
 
         if (deployer.balance < 10 ether) {
@@ -224,9 +224,7 @@ contract HoodiIntegrationScript is Script {
         swapRouter.swap{value: 0.0001 ether}(
             poolKey,
             SwapParams({
-                zeroForOne: true,
-                amountSpecified: -0.0001 ether,
-                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+                zeroForOne: true, amountSpecified: -0.0001 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
             }),
             ""
         );
@@ -235,9 +233,7 @@ contract HoodiIntegrationScript is Script {
         swapRouter.swap(
             poolKey,
             SwapParams({
-                zeroForOne: false,
-                amountSpecified: -1_000_000 ether,
-                sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+                zeroForOne: false, amountSpecified: -1_000_000 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             }),
             ""
         );

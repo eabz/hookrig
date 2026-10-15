@@ -1,13 +1,38 @@
 testMode: "assertion"
 prefix: "property_"
 seqLen: 100
-testLimit: 50000
+testLimit: 1000000
+workers: 8
 balanceContract: 0xffffffffffffffffffffffffffff
 coverage: true
 # HookRigOrchestrator / PoolManager exceed EIP-170 when embedded in the harness
 codeSize: 0xffffffffffff
 corpusDir: "fizz_data/corpus_echidna"
-cryticArgs: ["--foundry-compile-all"]
+deployContracts:
+  - ["0x1001", "AccessControlLogic"]
+  - ["0x1002", "AntiSnipeLogic"]
+  - ["0x1003", "ArbRecaptureLogic"]
+  - ["0x1004", "AutoBurnLogic"]
+  - ["0x1005", "AutoBuybackLogic"]
+  - ["0x1006", "BuySellTaxLogic"]
+  - ["0x1007", "CircuitBreakerLogic"]
+  - ["0x1008", "DynamicFeeLogic"]
+  - ["0x1009", "FeeSharingLogic"]
+  - ["0x100a", "JITGuardLogic"]
+  - ["0x100b", "KingOfThePoolLogic"]
+  - ["0x100c", "LimitOrdersLogic"]
+  - ["0x100d", "MEVProtectionLogic"]
+  - ["0x100e", "ManagedFeeLogic"]
+  - ["0x100f", "MarketHoursFeeLogic"]
+  - ["0x1010", "OracleLogic"]
+  - ["0x1011", "ReferralSplitLogic"]
+  - ["0x1012", "SwapRewardsLogic"]
+  - ["0x1013", "TWAMMLogic"]
+  - ["0x1014", "VestingSellCapLogic"]
+  - ["0x1015", "WalletCapLogic"]
+cryticArgs:
+  - "--foundry-compile-all"
+  - "--compile-libraries=(AccessControlLogic,0x1001),(AntiSnipeLogic,0x1002),(ArbRecaptureLogic,0x1003),(AutoBurnLogic,0x1004),(AutoBuybackLogic,0x1005),(BuySellTaxLogic,0x1006),(CircuitBreakerLogic,0x1007),(DynamicFeeLogic,0x1008),(FeeSharingLogic,0x1009),(JITGuardLogic,0x100a),(KingOfThePoolLogic,0x100b),(LimitOrdersLogic,0x100c),(MEVProtectionLogic,0x100d),(ManagedFeeLogic,0x100e),(MarketHoursFeeLogic,0x100f),(OracleLogic,0x1010),(ReferralSplitLogic,0x1011),(SwapRewardsLogic,0x1012),(TWAMMLogic,0x1013),(VestingSellCapLogic,0x1014),(WalletCapLogic,0x1015)"
 contractAddr: "0x7FA9385bE102ac3EAc297483Dd6233D62b3e1496"
 deployer: "0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38"
 # output format (comment out for TUI)
@@ -15,6 +40,6 @@ format: "text"
 # Hide solc stderr output and additional information during the testing.
 quiet: false
 stopOnFail: false
-disableSlither: false
+disableSlither: true
 
 # https://secure-contracts.com/program-analysis/echidna/configuration.html

@@ -100,11 +100,14 @@ abstract contract Base is StringUtils, Clamp, Deployer, Math {
 
     /// @notice A TWAMM order submitted through the harness (`rate = floor(total / duration)`, `TWAMMBlock.sol:54`).
     struct TwammOrder {
+        uint256 id;
+        address owner;
         uint256 poolIdx;
         bool zeroForOne;
         uint128 rate;
         uint64 expiry;
         uint128 total;
+        bool cancelled;
     }
 
     struct Ghosts {
@@ -135,6 +138,7 @@ abstract contract Base is StringUtils, Clamp, Deployer, Math {
         mapping(uint256 poolIdx => uint256) oracleChangedAt; // lower bound on the oracle's last checkpoint time
         mapping(uint256 poolIdx => uint256) oracleWindowStart; // `oracleChangedAt` before the latest change (GL-19)
         // ── Per-pool configuration (setup + `_registerPoolStack_clamped`) ──
+        mapping(uint256 poolIdx => address) poolAdmin;
         mapping(uint256 poolIdx => address) acManager;
         mapping(uint256 poolIdx => address) feeManager;
         mapping(uint256 poolIdx => uint24) feeCap;
@@ -345,9 +349,8 @@ abstract contract Base is StringUtils, Clamp, Deployer, Math {
         xykStack.enabledBlocksBitmap = HookPermissionMasks.BIT_ANTI_SNIPE | HookPermissionMasks.BIT_BUY_SELL_TAX
             | HookPermissionMasks.BIT_LP_REWARDS | HookPermissionMasks.BIT_KING_OF_THE_POOL;
         xykStack.antiSnipe = IHookRigBlock.AntiSnipeParams({launchFee: 50_000, normalFee: 3000, decayBlocks: 20});
-        xykStack.buySellTax = IHookRigBlock.BuySellTaxParams({
-            buyTaxBps: 100, sellTaxBps: 100, taxRecipient: actors[1], decayOnly: true
-        });
+        xykStack.buySellTax =
+            IHookRigBlock.BuySellTaxParams({buyTaxBps: 100, sellTaxBps: 100, taxRecipient: actors[1], decayOnly: true});
         xykStack.lpRewards = IHookRigBlock.LPRewardsParams({extraBuyFeeBps: 100});
         xykStack.kingOfThePool = IHookRigBlock.KingOfThePoolParams({
             potFeeOnBuyBps: 200, roundDurationSeconds: 600, minBuyAmountForReset: 1 ether
@@ -383,6 +386,10 @@ abstract contract Base is StringUtils, Clamp, Deployer, Math {
         ghosts.acChecks[POOL_PRIVATE] = 3; // checkBeforeSwap + checkBeforeAddLiquidity
         ghosts.registeredAtBlock[POOL_PRIVATE] = block.number;
 
+        ghosts.poolAdmin[POOL_MULTI] = admin;
+        ghosts.poolAdmin[POOL_PRIVATE] = admin;
+        ghosts.poolAdmin[POOL_XYK] = admin;
+        ghosts.poolAdmin[POOL_TRANCHE] = admin;
         ghosts.cfgBps[POOL_XYK] = [uint16(100), 100, 0, 0];
     }
 
@@ -419,9 +426,8 @@ abstract contract Base is StringUtils, Clamp, Deployer, Math {
         cfg.circuitBreaker = IHookRigBlock.CircuitBreakerParams({maxWindowTickDeviation: 3000, windowSeconds: 300});
         cfg.referralSplit = IHookRigBlock.ReferralSplitParams({referralFeeBps: 100});
         cfg.vestingSellCap = IHookRigBlock.VestingSellCapParams({maxDailySellBps: 2000});
-        cfg.autoBuyback = IHookRigBlock.AutoBuybackParams({
-            buybackFeeBps: 100, triggerFloorTick: -100, minBuybackReserve: 1 ether
-        });
+        cfg.autoBuyback =
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 100, triggerFloorTick: -100, minBuybackReserve: 1 ether});
         cfg.poolAdmin = admin;
     }
 
@@ -458,9 +464,8 @@ abstract contract Base is StringUtils, Clamp, Deployer, Math {
     ///      quadratic memory growth across ~2^14 iterations. Deploys the getter-only harness, whose hook
     ///      permissions are identical, so the mined address is valid for it as well.
     function _deployOrchestrator() internal returns (HookRigOrchestratorHarness orc) {
-        bytes32 initHash = keccak256(
-            abi.encodePacked(type(HookRigOrchestratorHarness).creationCode, abi.encode(poolManager, admin))
-        );
+        bytes32 initHash =
+            keccak256(abi.encodePacked(type(HookRigOrchestratorHarness).creationCode, abi.encode(poolManager, admin)));
         bytes memory buf = abi.encodePacked(bytes1(0xff), address(this), bytes32(0), initHash);
         for (uint256 salt; salt < 1_000_000; salt++) {
             assembly ("memory-safe") {

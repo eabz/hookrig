@@ -74,10 +74,14 @@ abstract contract LaunchpadFactoryHandler is Properties {
     function _launchpadFactory_launchNativeTick(uint256 stackSeed, uint256 liquiditySeed) internal {
         ITokenLaunchpad.NativeTickBand[] memory bands = new ITokenLaunchpad.NativeTickBand[](2);
         bands[0] = ITokenLaunchpad.NativeTickBand({
-            tickLower: -6000, tickUpper: -60, tokenAmount: uint128(clampBetween(liquiditySeed, 1 ether, 1_000_000 ether))
+            tickLower: -6000,
+            tickUpper: -60,
+            tokenAmount: uint128(clampBetween(liquiditySeed, 1 ether, 1_000_000 ether))
         });
         bands[1] = ITokenLaunchpad.NativeTickBand({
-            tickLower: -12_000, tickUpper: -6000, tokenAmount: uint128(clampBetween(liquiditySeed >> 128, 1 ether, 1_000_000 ether))
+            tickLower: -12_000,
+            tickUpper: -6000,
+            tokenAmount: uint128(clampBetween(liquiditySeed >> 128, 1 ether, 1_000_000 ether))
         });
         ITokenLaunchpad.NativeTickConfig memory cfg =
             ITokenLaunchpad.NativeTickConfig({initialSqrtPriceX96: SQRT_PRICE_1_1, tickSpacing: 60, bands: bands});
@@ -99,8 +103,10 @@ abstract contract LaunchpadFactoryHandler is Properties {
     /// @notice SP-26: claim-slice bps of the pool just appended by a launch (tax only; launch stacks have no
     ///         fee sharing or referral).
     function _recordLaunchCuts(IHookRigBlock.PoolStackConfig memory stack) internal {
+        uint256 idx = poolKeys.length - 1;
+        ghosts.poolAdmin[idx] = admin;
         if ((stack.enabledBlocksBitmap & HookPermissionMasks.BIT_BUY_SELL_TAX) == 0) return;
-        ghosts.cfgBps[poolKeys.length - 1] = [stack.buySellTax.buyTaxBps, stack.buySellTax.sellTaxBps, 0, 0];
+        ghosts.cfgBps[idx] = [stack.buySellTax.buyTaxBps, stack.buySellTax.sellTaxBps, 0, 0];
     }
 
     /// @notice Launch stacks always include King of the Pool (pot/seed paths) plus a seed-selected mix of cuts.

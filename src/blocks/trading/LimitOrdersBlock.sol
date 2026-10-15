@@ -233,8 +233,9 @@ library LimitOrdersLogic {
             TransientContext.setInternalHookExecution(poolId, true);
             uint256 outAmount;
             if (inputCurrency.isAddressZero()) {
-                outAmount =
-                    executor.executeFillSwap{value: order.inputAmount}(key, order.zeroForOne, order.inputAmount, msg.sender);
+                outAmount = executor.executeFillSwap{value: order.inputAmount}(
+                    key, order.zeroForOne, order.inputAmount, msg.sender
+                );
             } else {
                 IERC20(Currency.unwrap(inputCurrency)).safeTransfer(address(executor), order.inputAmount);
                 outAmount = executor.executeFillSwap(key, order.zeroForOne, order.inputAmount, msg.sender);

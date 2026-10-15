@@ -53,8 +53,7 @@ abstract contract CircuitBreakerBlock is IHookRigBlock {
         if (
             params.maxWindowTickDeviation < 0
                 || (params.maxWindowTickDeviation > 0 && params.maxWindowTickDeviation < 10)
-                || params.maxWindowTickDeviation > 887_272
-                || params.windowSeconds > MAX_WINDOW_SECONDS
+                || params.maxWindowTickDeviation > 887_272 || params.windowSeconds > MAX_WINDOW_SECONDS
                 || (params.windowSeconds > 0 && params.windowSeconds < 10)
         ) {
             revert CircuitBreakerLogic.InvalidCircuitBreakerConfig(params.maxWindowTickDeviation, params.windowSeconds);

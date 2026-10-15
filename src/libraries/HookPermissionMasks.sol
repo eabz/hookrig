@@ -153,8 +153,11 @@ library HookPermissionMasks {
         if (
             (bitmap & BIT_TWAMM) != 0
                 && (bitmap
-                        & (BIT_ANTI_SNIPE | BIT_WALLET_CAP | BIT_VESTING_SELL_CAP | BIT_BUY_SELL_TAX | BIT_AUTO_BURN))
-                    != 0
+                            & (BIT_ANTI_SNIPE
+                                | BIT_WALLET_CAP
+                                | BIT_VESTING_SELL_CAP
+                                | BIT_BUY_SELL_TAX
+                                | BIT_AUTO_BURN)) != 0
         ) {
             return false;
         }

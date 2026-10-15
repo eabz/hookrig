@@ -256,12 +256,11 @@ abstract contract AfterSwapDeltaAggregator is
         totalHookDeltaUnspecified = SafeCast.toInt128(SafeCast.toInt256(totalCutAmount));
     }
 
-    function _boundedCut(
-        PoolTokenDir.SwapContext memory ctx,
-        uint16 bps,
-        uint256 currentTotal,
-        uint256 maxAllowed
-    ) private pure returns (uint256 cut) {
+    function _boundedCut(PoolTokenDir.SwapContext memory ctx, uint16 bps, uint256 currentTotal, uint256 maxAllowed)
+        private
+        pure
+        returns (uint256 cut)
+    {
         if (currentTotal >= maxAllowed) return 0;
         Math.Rounding rounding = ctx.isExactInput ? Math.Rounding.Floor : Math.Rounding.Ceil;
         cut = Math.mulDiv(ctx.grossUnspecifiedAmount, bps, 10_000, rounding);

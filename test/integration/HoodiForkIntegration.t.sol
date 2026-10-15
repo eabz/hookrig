@@ -117,8 +117,10 @@ contract HoodiForkIntegrationTest is Test {
             // --- Archetype A: Retail Tokenomics / Launchpad Pools (2,645 valid combinations) ---
             // `AntiSnipe` requires `DynamicFee` or `MarketHoursFee` (6 valid Fee+AntiSnipe states)
             if ((bitmap & HookPermissionMasks.BIT_ANTI_SNIPE) != 0) {
-                if ((baseFeeBits & (HookPermissionMasks.BIT_DYNAMIC_FEE | HookPermissionMasks.BIT_MARKET_HOURS_FEE)) == 0)
-                {
+                if (
+                    (baseFeeBits & (HookPermissionMasks.BIT_DYNAMIC_FEE | HookPermissionMasks.BIT_MARKET_HOURS_FEE))
+                        == 0
+                ) {
                     return false;
                 }
             }
@@ -210,7 +212,8 @@ contract HoodiForkIntegrationTest is Test {
             HookPermissionMasks.BIT_LP_REWARDS | HookPermissionMasks.BIT_AUTO_BURN,
             HookPermissionMasks.BIT_LP_REWARDS | HookPermissionMasks.BIT_AUTO_BURN
                 | HookPermissionMasks.BIT_BUY_SELL_TAX,
-            HookPermissionMasks.BIT_LP_REWARDS | HookPermissionMasks.BIT_AUTO_BURN | HookPermissionMasks.BIT_FEE_SHARING,
+            HookPermissionMasks.BIT_LP_REWARDS | HookPermissionMasks.BIT_AUTO_BURN
+                | HookPermissionMasks.BIT_FEE_SHARING,
             HookPermissionMasks.BIT_LP_REWARDS | HookPermissionMasks.BIT_AUTO_BURN
                 | HookPermissionMasks.BIT_SWAP_REWARDS,
             HookPermissionMasks.BIT_LP_REWARDS | HookPermissionMasks.BIT_REFERRAL_SPLIT,
@@ -373,25 +376,21 @@ contract HoodiForkIntegrationTest is Test {
         cfg.isToken0ProjectToken = false;
         cfg.poolAdmin = admin;
 
-        cfg.dynamicFee = IHookRigBlock.DynamicFeeParams({
-            baseFee: 3000, maxFee: 10_000, volatilityTickThreshold: 50
-        });
+        cfg.dynamicFee = IHookRigBlock.DynamicFeeParams({baseFee: 3000, maxFee: 10_000, volatilityTickThreshold: 50});
         cfg.managedFee = IHookRigBlock.ManagedFeeParams({startingFee: 3000, feeCap: 10_000, manager: admin});
         cfg.marketHoursFee = IHookRigBlock.MarketHoursFeeParams({
             openFee: 1000, closedFee: 5000, openHourUtc: 9, closeHourUtc: 17, weekendClosed: true
         });
         cfg.antiSnipe = IHookRigBlock.AntiSnipeParams({launchFee: 40_000, normalFee: 3000, decayBlocks: 10});
-        cfg.mevProtection = IHookRigBlock.MEVProtectionParams({
-            maxTickDeltaPerSwap: 500, minLPHoldBlocks: 5, jitExitPenaltyBps: 100
-        });
+        cfg.mevProtection =
+            IHookRigBlock.MEVProtectionParams({maxTickDeltaPerSwap: 500, minLPHoldBlocks: 5, jitExitPenaltyBps: 100});
         cfg.arbRecapture = IHookRigBlock.ArbRecaptureParams({recaptureShareBps: 2000, arbTriggerTickDelta: 10});
         cfg.accessControl = IHookRigBlock.AccessControlParams({
             checkBeforeAddLiquidity: false, checkBeforeSwap: false, merkleRoot: bytes32(0), manager: admin
         });
         cfg.walletCap = IHookRigBlock.WalletCapParams({maxWalletBps: 5000, sunsetBlocks: 500});
-        cfg.buySellTax = IHookRigBlock.BuySellTaxParams({
-            buyTaxBps: 100, sellTaxBps: 100, taxRecipient: admin, decayOnly: true
-        });
+        cfg.buySellTax =
+            IHookRigBlock.BuySellTaxParams({buyTaxBps: 100, sellTaxBps: 100, taxRecipient: admin, decayOnly: true});
         cfg.autoBurn = IHookRigBlock.AutoBurnParams({burnOnBuyBps: 100, useTokenBurnCall: false});
         cfg.feeSharing = IHookRigBlock.FeeSharingParams({
             feeShareBps: 100, primaryRecipient: admin, secondaryRecipient: referrer, secondaryShareBps: 2500
@@ -401,13 +400,11 @@ contract HoodiForkIntegrationTest is Test {
         cfg.kingOfThePool = IHookRigBlock.KingOfThePoolParams({
             potFeeOnBuyBps: 100, roundDurationSeconds: 1800, minBuyAmountForReset: 0.01 ether
         });
-        cfg.circuitBreaker =
-            IHookRigBlock.CircuitBreakerParams({maxWindowTickDeviation: 500, windowSeconds: 300});
+        cfg.circuitBreaker = IHookRigBlock.CircuitBreakerParams({maxWindowTickDeviation: 500, windowSeconds: 300});
         cfg.referralSplit = IHookRigBlock.ReferralSplitParams({referralFeeBps: 50});
         cfg.vestingSellCap = IHookRigBlock.VestingSellCapParams({maxDailySellBps: 2500});
-        cfg.autoBuyback = IHookRigBlock.AutoBuybackParams({
-            buybackFeeBps: 50, triggerFloorTick: -100, minBuybackReserve: 0.01 ether
-        });
+        cfg.autoBuyback =
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 50, triggerFloorTick: -100, minBuybackReserve: 0.01 ether});
     }
 
     function test_HoodiFork_EndToEndCreate2DeployLaunchGraduateAndMultiBlockSwaps() public {
@@ -499,7 +496,9 @@ contract HoodiForkIntegrationTest is Test {
         vm.expectRevert();
         router.swap{value: 0.05 ether}(
             poolKey,
-            SwapParams({zeroForOne: true, amountSpecified: -0.05 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1}),
+            SwapParams({
+                zeroForOne: true, amountSpecified: -0.05 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
             ""
         );
 
@@ -510,7 +509,9 @@ contract HoodiForkIntegrationTest is Test {
         orchestrator.registerReferrer(poolId, referrer);
         router.swap{value: 0.05 ether}(
             poolKey,
-            SwapParams({zeroForOne: true, amountSpecified: -0.05 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1}),
+            SwapParams({
+                zeroForOne: true, amountSpecified: -0.05 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
             ""
         );
         vm.stopPrank();
@@ -534,9 +535,7 @@ contract HoodiForkIntegrationTest is Test {
         router.swap(
             poolKey,
             SwapParams({
-                zeroForOne: false,
-                amountSpecified: -1_000_000 ether,
-                sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+                zeroForOne: false, amountSpecified: -1_000_000 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             }),
             ""
         );
@@ -577,9 +576,7 @@ contract HoodiForkIntegrationTest is Test {
         assertFalse(isValidTier3Bitmap(HookPermissionMasks.BIT_MEV_PROTECTION | HookPermissionMasks.BIT_JIT_GUARD));
         // Contradiction M3: Conflicting Dislocation (`ArbRecapture + MEVProtection`, `ArbRecapture + CircuitBreaker`)
         assertFalse(isValidTier3Bitmap(HookPermissionMasks.BIT_ARB_RECAPTURE | HookPermissionMasks.BIT_MEV_PROTECTION));
-        assertFalse(
-            isValidTier3Bitmap(HookPermissionMasks.BIT_ARB_RECAPTURE | HookPermissionMasks.BIT_CIRCUIT_BREAKER)
-        );
+        assertFalse(isValidTier3Bitmap(HookPermissionMasks.BIT_ARB_RECAPTURE | HookPermissionMasks.BIT_CIRCUIT_BREAKER));
         // Contradiction M4: Two Holder Caps (`WalletCap + VestingSellCap`)
         assertFalse(isValidTier3Bitmap(HookPermissionMasks.BIT_WALLET_CAP | HookPermissionMasks.BIT_VESTING_SELL_CAP));
         // Contradiction M5: Multiple Sinks (`AutoBurn + AutoBuyback`, `KingOfThePool + AutoBuyback`)

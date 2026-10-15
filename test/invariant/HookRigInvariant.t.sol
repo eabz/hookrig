@@ -228,62 +228,35 @@ contract HookRigInvariantTest is HookRigTestBase {
         cfg.dynamicFee = IHookRigBlock.DynamicFeeParams({baseFee: 2000, maxFee: 10_000, volatilityTickThreshold: 50});
         cfg.managedFee = IHookRigBlock.ManagedFeeParams({startingFee: 2500, feeCap: 15_000, manager: owner});
         cfg.marketHoursFee = IHookRigBlock.MarketHoursFeeParams({
-            openHourUtc: 13,
-            closeHourUtc: 20,
-            openFee: 1500,
-            closedFee: 4000,
-            weekendClosed: true
+            openHourUtc: 13, closeHourUtc: 20, openFee: 1500, closedFee: 4000, weekendClosed: true
         });
         cfg.antiSnipe = IHookRigBlock.AntiSnipeParams({launchFee: 30_000, normalFee: 2000, decayBlocks: 10});
-        cfg.mevProtection = IHookRigBlock.MEVProtectionParams({
-            maxTickDeltaPerSwap: 500,
-            minLPHoldBlocks: 1,
-            jitExitPenaltyBps: 0
-        });
+        cfg.mevProtection =
+            IHookRigBlock.MEVProtectionParams({maxTickDeltaPerSwap: 500, minLPHoldBlocks: 1, jitExitPenaltyBps: 0});
         cfg.arbRecapture = IHookRigBlock.ArbRecaptureParams({recaptureShareBps: 1000, arbTriggerTickDelta: 10});
         cfg.accessControl = IHookRigBlock.AccessControlParams({
-            checkBeforeAddLiquidity: false,
-            checkBeforeSwap: false,
-            merkleRoot: bytes32(0),
-            manager: owner
+            checkBeforeAddLiquidity: false, checkBeforeSwap: false, merkleRoot: bytes32(0), manager: owner
         });
         cfg.walletCap = IHookRigBlock.WalletCapParams({maxWalletBps: 5000, sunsetBlocks: 100});
-        cfg.buySellTax = IHookRigBlock.BuySellTaxParams({
-            buyTaxBps: 100,
-            sellTaxBps: 100,
-            taxRecipient: treasury,
-            decayOnly: true
-        });
+        cfg.buySellTax =
+            IHookRigBlock.BuySellTaxParams({buyTaxBps: 100, sellTaxBps: 100, taxRecipient: treasury, decayOnly: true});
         cfg.autoBurn = IHookRigBlock.AutoBurnParams({burnOnBuyBps: 100, useTokenBurnCall: true});
         cfg.feeSharing = IHookRigBlock.FeeSharingParams({
-            feeShareBps: 100,
-            primaryRecipient: treasury,
-            secondaryRecipient: charity,
-            secondaryShareBps: 5000
+            feeShareBps: 100, primaryRecipient: treasury, secondaryRecipient: charity, secondaryShareBps: 5000
         });
         cfg.lpRewards = IHookRigBlock.LPRewardsParams({extraBuyFeeBps: 100});
         cfg.swapRewards = IHookRigBlock.SwapRewardsParams({pointsPerUnitVolume: 1e18});
         cfg.kingOfThePool = IHookRigBlock.KingOfThePoolParams({
-            potFeeOnBuyBps: 100,
-            roundDurationSeconds: 600,
-            minBuyAmountForReset: 10 ether
+            potFeeOnBuyBps: 100, roundDurationSeconds: 600, minBuyAmountForReset: 10 ether
         });
         cfg.circuitBreaker = IHookRigBlock.CircuitBreakerParams({maxWindowTickDeviation: 500, windowSeconds: 300});
         cfg.referralSplit = IHookRigBlock.ReferralSplitParams({referralFeeBps: 100});
         cfg.vestingSellCap = IHookRigBlock.VestingSellCapParams({maxDailySellBps: 2000});
-        cfg.autoBuyback = IHookRigBlock.AutoBuybackParams({
-            buybackFeeBps: 100,
-            triggerFloorTick: -50,
-            minBuybackReserve: 10 ether
-        });
+        cfg.autoBuyback =
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 100, triggerFloorTick: -50, minBuybackReserve: 10 ether});
 
-        PoolKey memory customKey = PoolKey({
-            currency0: currency0,
-            currency1: currency1,
-            fee: 0x800000,
-            tickSpacing: 120,
-            hooks: invKey.hooks
-        });
+        PoolKey memory customKey =
+            PoolKey({currency0: currency0, currency1: currency1, fee: 0x800000, tickSpacing: 120, hooks: invKey.hooks});
 
         if (!orchestrator.isValidTier3Bitmap(bitmap)) {
             vm.expectRevert(abi.encodeWithSelector(IHookRigOrchestrator.InvalidBlockBitmap.selector, bitmap));

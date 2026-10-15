@@ -180,8 +180,8 @@ contract LaunchpadFactory is ITokenLaunchpad {
         IHookRigOrchestrator.PoolStackConfig memory stackConfig,
         uint16 curveWalletCapBps
     ) internal pure {
-        uint32 resolvedBitmap =
-            HookPermissionMasks.getPresetBitmap(stackConfig.presetId) | stackConfig.enabledBlocksBitmap;
+        uint32 resolvedBitmap = HookPermissionMasks.getPresetBitmap(stackConfig.presetId)
+        | stackConfig.enabledBlocksBitmap;
         if (
             (resolvedBitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0 && curveWalletCapBps > 0
                 && stackConfig.walletCap.maxWalletBps < curveWalletCapBps

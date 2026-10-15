@@ -102,7 +102,9 @@ abstract contract SteppedTrancheLaunchHandler is Properties {
         public
         tracked
     {
-        _trancheBuyChecked(trancheCurves[curveSeed % trancheCurves.length], quoteAmountIn, minTokensOut, recipient, false);
+        _trancheBuyChecked(
+            trancheCurves[curveSeed % trancheCurves.length], quoteAmountIn, minTokensOut, recipient, false
+        );
     }
 
     function steppedTrancheLaunch_sell(uint256 curveSeed, uint256 tokenAmountIn, uint256 minQuoteOut, address recipient)
@@ -243,7 +245,7 @@ abstract contract SteppedTrancheLaunchHandler is Properties {
         o.alloc = alloc;
         o.payerDebit = _currencyBalance(curve.quoteCurrency(), actor);
         o.recipientCredit = _currencyBalance(Currency.wrap(curve.projectToken()), recipient);
-        o.checkCredit = recipient != address(curve);
+        o.checkCredit = recipient != address(curve) && recipient != address(poolManager);
     }
 
     /// @notice Fills the before (`isBefore`) or after half of a curve round-trip record (raised includes surcharges).

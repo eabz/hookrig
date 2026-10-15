@@ -11,7 +11,7 @@ library DecimalPrinter {
     }
 
     function toDec(uint256 _value, uint256 decimals) public pure returns (string memory) {
-        uint256 base = 10**decimals;
+        uint256 base = 10 ** decimals;
         uint256 integerPart = _value / base;
         uint256 fractionalPart = _value % base;
 
