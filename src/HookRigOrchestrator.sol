@@ -23,13 +23,14 @@ import {MEVProtectionBlock} from "./blocks/protection/MEVProtectionBlock.sol";
 import {AccessControlBlock} from "./blocks/protection/AccessControlBlock.sol";
 import {CircuitBreakerBlock} from "./blocks/protection/CircuitBreakerBlock.sol";
 import {WalletCapBlock} from "./blocks/token-rules/WalletCapBlock.sol";
+import {VestingSellCapBlock} from "./blocks/token-rules/VestingSellCapBlock.sol";
 import {SwapRewardsBlock} from "./blocks/rewards/SwapRewardsBlock.sol";
 import {LimitOrdersBlock} from "./blocks/trading/LimitOrdersBlock.sol";
 import {TWAMMBlock} from "./blocks/trading/TWAMMBlock.sol";
 import {OracleBlock} from "./blocks/trading/OracleBlock.sol";
 
 /// @title HookRigOrchestrator
-/// @notice Composable Uniswap v4 Hook Orchestrator uniting all 17 core blocks (+ expansion blocks) and 12 presets.
+/// @notice Composable Uniswap v4 Hook Orchestrator uniting all 17 core blocks, 5 expansion blocks, and 12 presets.
 /// @dev Enforces deterministic callback ordering (`docs/03-hooks-flow.md`) and security invariants (`docs/04-security-mechanics-and-caveats.md`).
 contract HookRigOrchestrator is
     HookRigBase,
@@ -39,6 +40,7 @@ contract HookRigOrchestrator is
     AccessControlBlock,
     CircuitBreakerBlock,
     WalletCapBlock,
+    VestingSellCapBlock,
     SwapRewardsBlock,
     LimitOrdersBlock,
     TWAMMBlock,
@@ -175,6 +177,18 @@ contract HookRigOrchestrator is
                 ? uint32(168 hours)
                 : 0;
             _initKingOfThePool(poolId, config.kingOfThePool, overrideDuration);
+        }
+        if ((bitmap & HookPermissionMasks.BIT_CIRCUIT_BREAKER) != 0) {
+            _initCircuitBreaker(poolId, config.circuitBreaker);
+        }
+        if ((bitmap & HookPermissionMasks.BIT_REFERRAL_SPLIT) != 0) {
+            _initReferralSplit(poolId, config.referralSplit);
+        }
+        if ((bitmap & HookPermissionMasks.BIT_VESTING_SELL_CAP) != 0) {
+            _initVestingSellCap(poolId, config.vestingSellCap);
+        }
+        if ((bitmap & HookPermissionMasks.BIT_AUTO_BUYBACK) != 0) {
+            _initAutoBuyback(poolId, config.autoBuyback);
         }
 
         emit PoolStackConfigured(poolId, config.presetId, bitmap, admin);
@@ -377,6 +391,13 @@ contract HookRigOrchestrator is
                 netTokensToBuyer = uint256(params.amountSpecified);
             }
             _enforceWalletCapAfterBuy(poolId, ctx.projectCurrency, ctx.trader, netTokensToBuyer);
+        }
+
+        if ((bitmap & HookPermissionMasks.BIT_VESTING_SELL_CAP) != 0 && !ctx.isBuy) {
+            uint256 projectTokensSold = ctx.isExactInput
+                ? (params.amountSpecified < 0 ? uint256(-params.amountSpecified) : 0)
+                : ctx.grossUnspecifiedAmount + totalCutAmount;
+            _enforceVestingSellCap(poolId, ctx.projectCurrency, ctx.trader, projectTokensSold);
         }
 
         if ((bitmap & HookPermissionMasks.BIT_SWAP_REWARDS) != 0) {

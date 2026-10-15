@@ -4,28 +4,31 @@ pragma solidity ^0.8.26;
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
-/// @title MarketHoursFeeBlock
-/// @notice Group 1 (Fees) — Block #3: UTC market-hours schedule fee (`afterInitialize`, `beforeSwap`).
-/// @dev Trust Level: Low (immutable UTC schedule once initialized; designed for RWA / Stock-quoted tokens).
-abstract contract MarketHoursFeeBlock is IHookRigBlock {
+library MarketHoursFeeLogic {
     uint24 internal constant MAX_MARKET_HOURS_FEE = 50_000; // 5.00%
-
-    mapping(PoolId poolId => MarketHoursFeeParams params) internal _marketHoursConfigs;
 
     error InvalidMarketHoursConfig();
 
-    function _initMarketHoursFee(PoolId poolId, MarketHoursFeeParams calldata params) internal {
+    function init(
+        mapping(PoolId => IHookRigBlock.MarketHoursFeeParams) storage configs,
+        PoolId poolId,
+        IHookRigBlock.MarketHoursFeeParams calldata params
+    ) external {
         if (
             params.openHourUtc >= 24 || params.closeHourUtc >= 24 || params.openFee > MAX_MARKET_HOURS_FEE
                 || params.closedFee > MAX_MARKET_HOURS_FEE
         ) {
             revert InvalidMarketHoursConfig();
         }
-        _marketHoursConfigs[poolId] = params;
+        configs[poolId] = params;
     }
 
-    function _computeMarketHoursFee(PoolId poolId) internal view returns (uint24) {
-        MarketHoursFeeParams storage cfg = _marketHoursConfigs[poolId];
+    function computeFee(mapping(PoolId => IHookRigBlock.MarketHoursFeeParams) storage configs, PoolId poolId)
+        external
+        view
+        returns (uint24)
+    {
+        IHookRigBlock.MarketHoursFeeParams storage cfg = configs[poolId];
         uint24 openFee = cfg.openFee;
         uint24 closedFee = cfg.closedFee;
         if (openFee == 0 && closedFee == 0) return 0;
@@ -43,5 +46,20 @@ abstract contract MarketHoursFeeBlock is IHookRigBlock {
             : (currentHourUtc >= openH || currentHourUtc < closeH);
 
         return isOpen ? openFee : closedFee;
+    }
+}
+
+/// @title MarketHoursFeeBlock
+/// @notice Group 1 (Fees) — Block #3: UTC market-hours schedule fee (`afterInitialize`, `beforeSwap`).
+/// @dev Trust Level: Low (immutable UTC schedule once initialized; designed for RWA / Stock-quoted tokens).
+abstract contract MarketHoursFeeBlock is IHookRigBlock {
+    mapping(PoolId poolId => MarketHoursFeeParams params) internal _marketHoursConfigs;
+
+    function _initMarketHoursFee(PoolId poolId, MarketHoursFeeParams calldata params) internal {
+        MarketHoursFeeLogic.init(_marketHoursConfigs, poolId, params);
+    }
+
+    function _computeMarketHoursFee(PoolId poolId) internal view returns (uint24) {
+        return MarketHoursFeeLogic.computeFee(_marketHoursConfigs, poolId);
     }
 }

@@ -150,6 +150,29 @@ interface IHookRigBlock {
         uint128 minBuyAmountForReset; // Anti-dust griefing floor
     }
 
+    // -------------------------------------------------------------------------
+    // Recommended Expansion Block Parameter Structs (Blocks #18..#22)
+    // -------------------------------------------------------------------------
+
+    struct CircuitBreakerParams {
+        int24 maxWindowTickDeviation; // Max allowed +/- tick movement per rolling window
+        uint32 windowSeconds; // Rolling window duration in seconds (default 300s)
+    }
+
+    struct ReferralSplitParams {
+        uint16 referralFeeBps; // <= 300 (3.00% hard cap credited to referrer)
+    }
+
+    struct VestingSellCapParams {
+        uint16 maxDailySellBps; // Max % of wallet balance sellable per 24h epoch (in bps, e.g. 1000 = 10%)
+    }
+
+    struct AutoBuybackParams {
+        uint16 buybackFeeBps; // <= 500 (5.00% hard cap accumulated into pool buyback reserve)
+        int24 triggerFloorTick; // Spot tick at or below which accumulated reserves defend the floor
+        uint128 minBuybackReserve; // Minimum accumulated reserve required to trigger floor defense
+    }
+
     /// @notice Unified configuration bundle passed when initializing a pool in HookRig.
     struct PoolStackConfig {
         PresetId presetId;
@@ -171,5 +194,9 @@ interface IHookRigBlock {
         LPRewardsParams lpRewards;
         SwapRewardsParams swapRewards;
         KingOfThePoolParams kingOfThePool;
+        CircuitBreakerParams circuitBreaker;
+        ReferralSplitParams referralSplit;
+        VestingSellCapParams vestingSellCap;
+        AutoBuybackParams autoBuyback;
     }
 }
