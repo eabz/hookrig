@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -48,6 +49,12 @@ contract LaunchpadFactory is ITokenLaunchpad {
     error PostGraduationWalletCapBelowCurveCap(uint16 poolWalletCapBps, uint16 curveWalletCapBps);
     error InsufficientCurveTokenSupply(uint256 requiredSupply, uint256 availableSupply);
     error InvalidCurveConfiguration();
+    error UnsupportedHookContract(address hookContract);
+    error UnsafeLaunchStack(uint32 bitmap);
+
+    /// @notice Highest AntiSnipe launch fee a launchpad pool may use (25%, the aggregate cut budget). The fee
+    ///         restarts at graduation and sits outside that budget, so a higher fee would trap curve holders.
+    uint24 public constant MAX_LAUNCH_ANTI_SNIPE_FEE = 250_000;
 
     constructor(
         IPoolManager _poolManager,
@@ -73,7 +80,7 @@ contract LaunchpadFactory is ITokenLaunchpad {
         VirtualXYKConfig calldata curveConfig,
         bytes32 salt
     ) external returns (address token, address curve, PoolKey memory key) {
-        if (address(hookContract) == address(0)) hookContract = defaultOrchestrator;
+        hookContract = _resolveHook(hookContract);
 
         _validateWalletCapAlignment(stackConfig, curveConfig.maxWalletBpsDuringCurve);
         if (
@@ -106,7 +113,7 @@ contract LaunchpadFactory is ITokenLaunchpad {
         SteppedTrancheConfig calldata trancheConfig,
         bytes32 salt
     ) external returns (address token, address curve, PoolKey memory key) {
-        if (address(hookContract) == address(0)) hookContract = defaultOrchestrator;
+        hookContract = _resolveHook(hookContract);
 
         _validateWalletCapAlignment(stackConfig, trancheConfig.maxWalletBps);
         if (
@@ -151,7 +158,8 @@ contract LaunchpadFactory is ITokenLaunchpad {
         NativeTickConfig calldata nativeConfig,
         bytes32 salt
     ) external returns (address token, address curve, PoolKey memory key) {
-        if (address(hookContract) == address(0)) hookContract = defaultOrchestrator;
+        hookContract = _resolveHook(hookContract);
+        _validateWalletCapAlignment(stackConfig, 0);
         if (nativeConfig.bands.length == 0) {
             revert InvalidCurveConfiguration();
         }
@@ -177,6 +185,28 @@ contract LaunchpadFactory is ITokenLaunchpad {
             LaunchCurveType.NativeTick
         );
         NativeTickLaunch(curve).initializeAndSeedNativeTicks(key, token, nativeConfig);
+    }
+
+    /// @dev Curves graduate into the hook they are given, so only the audited default orchestrator is accepted:
+    ///      a creator-written hook could block buyer sells after graduation.
+    function _resolveHook(IHookRigOrchestrator hookContract) internal view returns (IHookRigOrchestrator) {
+        if (address(hookContract) == address(0)) return defaultOrchestrator;
+        if (hookContract != defaultOrchestrator) revert UnsupportedHookContract(address(hookContract));
+        return hookContract;
+    }
+
+    /// @dev Rejects launch stacks that let a creator trap curve buyers after graduation: AccessControl (only
+    ///      allowlisted traders could sell) and an AntiSnipe launch fee above the aggregate cut budget.
+    function _validateLaunchStack(IHookRigOrchestrator.PoolStackConfig memory stackConfig) internal pure {
+        uint32 resolvedBitmap =
+            HookPermissionMasks.getPresetBitmap(stackConfig.presetId) | stackConfig.enabledBlocksBitmap;
+        if (
+            (resolvedBitmap & HookPermissionMasks.BIT_ACCESS_CONTROL) != 0
+                || ((resolvedBitmap & HookPermissionMasks.BIT_ANTI_SNIPE) != 0
+                    && stackConfig.antiSnipe.launchFee > MAX_LAUNCH_ANTI_SNIPE_FEE)
+        ) {
+            revert UnsafeLaunchStack(resolvedBitmap);
+        }
     }
 
     function _validateWalletCapAlignment(
@@ -208,7 +238,17 @@ contract LaunchpadFactory is ITokenLaunchpad {
     }
 
     /// @notice Helper to mine a CREATE2 salt off-chain or on-chain so `deployedToken > Currency.unwrap(quoteCurrency)`.
+    ///         The prediction is for a launch sent by the caller (`msg.sender`).
     function predictTokenAddress(LaunchTokenMetadata calldata meta, bytes32 salt)
+        public
+        view
+        returns (address predicted)
+    {
+        return predictTokenAddressFor(meta, salt, msg.sender);
+    }
+
+    /// @notice Predicts the token address of a launch that `deployer` sends with `salt`.
+    function predictTokenAddressFor(LaunchTokenMetadata calldata meta, bytes32 salt, address deployer)
         public
         view
         returns (address predicted)
@@ -217,8 +257,15 @@ contract LaunchpadFactory is ITokenLaunchpad {
             type(HookRigToken).creationCode,
             abi.encode(meta.name, meta.symbol, meta.totalSupply, address(this), meta.creator)
         );
-        bytes32 hash = keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, keccak256(bytecode)));
+        bytes32 hash = keccak256(
+            abi.encodePacked(bytes1(0xff), address(this), _deployerSalt(deployer, salt), keccak256(bytecode))
+        );
         predicted = address(uint160(uint256(hash)));
+    }
+
+    /// @dev Binds the CREATE2 salt to the launch sender, so a copied pending launch cannot take the address.
+    function _deployerSalt(address deployer, bytes32 salt) internal pure returns (bytes32) {
+        return keccak256(abi.encode(deployer, salt));
     }
 
     function _deploySortedTokenAndRegisterPool(
@@ -231,6 +278,8 @@ contract LaunchpadFactory is ITokenLaunchpad {
         bytes32 salt,
         LaunchCurveType curveType
     ) internal returns (address token, PoolKey memory key) {
+        if (tickSpacing > TickMath.MAX_TICK_SPACING) revert InvalidCurveConfiguration();
+        _validateLaunchStack(stackConfig);
         token = _deployTokenAndVest(meta, Currency.unwrap(quoteCurrency), curve, salt);
         address creator = meta.creator;
 
@@ -261,8 +310,9 @@ contract LaunchpadFactory is ITokenLaunchpad {
         internal
         returns (address token)
     {
-        HookRigToken deployed =
-            new HookRigToken{salt: salt}(meta.name, meta.symbol, meta.totalSupply, address(this), meta.creator);
+        HookRigToken deployed = new HookRigToken{salt: _deployerSalt(msg.sender, salt)}(
+            meta.name, meta.symbol, meta.totalSupply, address(this), meta.creator
+        );
         token = address(deployed);
 
         if (uint160(token) <= uint160(quoteAddr)) {

@@ -234,6 +234,9 @@ contract BlocksUnitTest is HookRigTestBase {
 
         // Large dislocation swap triggers arb recapture and donates to LPs
         _swapExactIn(alice, key, true, 15_000 ether, "");
+        assertEq(orchestrator.totalLPRewardsDonated(poolId), 0, "donation is queued, not paid in the same swap");
+        assertGt(orchestrator.pendingLPDonation(poolId, currency1), 0);
+        _flushLPDonations(key);
         assertGt(orchestrator.totalLPRewardsDonated(poolId), 0);
 
         // Advance block and swap again to update referenceTick
@@ -530,6 +533,7 @@ contract BlocksUnitTest is HookRigTestBase {
         _seedFullRangeLiquidity(key, 1_000_000 ether);
 
         _swapExactIn(alice, key, true, 1000 ether, "");
+        _flushLPDonations(key);
         assertGt(orchestrator.totalLPRewardsDonated(poolId), 0);
 
         // Cap check (> 500 bps)
@@ -635,6 +639,7 @@ contract BlocksUnitTest is HookRigTestBase {
 
         // Next swap pushes tick down below -10 -> triggers floor buyback donation to LPs
         _swapExactIn(bob, key, true, 15_000 ether, "");
+        _flushLPDonations(key);
         assertGt(orchestrator.totalLPRewardsDonated(poolId), 0);
     }
 
@@ -672,30 +677,29 @@ contract BlocksUnitTest is HookRigTestBase {
         // Swap downward across tick -60 -> fills bucket at -60
         _swapExactIn(bob, key, true, 25_000 ether, "");
 
-        // Filled bucket cannot be cancelled
+        // A filled but unclaimed order can still be cancelled: its input never left escrow
+        uint256 aliceBefore = token0.balanceOf(alice);
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(LimitOrdersLogic.BucketAlreadyFilled.selector, orderDown));
         orchestrator.cancelLimitOrder(key, orderDown);
+        assertGt(token0.balanceOf(alice), aliceBefore);
 
         // Swap upward across tick +60 -> fills bucket at +60
         _swapExactIn(bob, key, false, 50_000 ether, "");
     }
 
-    function test_Block16_TWAMM_VirtualOrderStreaming() public {
+    function test_Block16_TWAMM_OrdersDisabled() public {
         IHookRigBlock.PoolStackConfig memory cfg;
         cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_TWAMM;
 
         (PoolKey memory key,) = _initPoolWithStack(cfg);
         _seedFullRangeLiquidity(key, 1_000_000 ether);
 
+        // TWAMM never swaps deposits, so new orders are rejected instead of escrowing funds that cannot pay out
         vm.prank(alice);
-        uint256 orderId = orchestrator.submitTWAMMOrder(key, true, 3600 ether, 3600);
-        assertEq(orderId, 1);
+        vm.expectRevert(TWAMMLogic.TWAMMOrdersDisabled.selector);
+        orchestrator.submitTWAMMOrder(key, true, 3600 ether, 3600);
 
-        vm.prank(bob);
-        orchestrator.submitTWAMMOrder(key, false, 1800 ether, 3600);
-
-        // Advance time by 600s and trigger swap/addLiquidity -> virtual orders execute
+        // Swaps on a TWAMM pool keep working
         vm.warp(block.timestamp + 600);
         _swapExactIn(carol, key, true, 100 ether, "");
     }

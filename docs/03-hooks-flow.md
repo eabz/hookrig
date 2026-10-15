@@ -95,7 +95,7 @@ $$f_{\text{resolved}} = \min\Big(\text{MAX\_LP\_FEE},\; \max\big(f_{\text{dynami
 
 ### 2.4 `afterSwap` & `AfterSwapDeltaAggregator` (Single-Pass Output Slicing)
 
-Six of the 17 blocks (`Arb recapture`, `Buy and sell tax`, `Auto burn`, `Fee sharing`, `LP rewards`, `King of the Pool`) use `afterSwapReturnDelta` to capture a portion of the swap's output currency.
+Eight of the 22 blocks (`Arb recapture`, `Buy and sell tax`, `Auto burn`, `Fee sharing`, `LP rewards`, `King of the Pool`, `Referral split`, and `Auto buyback`) plus the static `5 bps` (`0.05%`) **Protocol Royalty** (`PROTOCOL_ROYALTY_BPS = 5` to `PROTOCOL_ROYALTY_RECIPIENT = 0x576e9C47665887298EB39eeaa070Dfc1fF6B960A`) use `afterSwapReturnDelta` to capture a portion of the swap's unspecified currency.
 
 #### How `afterSwapReturnDelta` Works in Uniswap v4
 - When `afterSwap` returns `int128 hookDeltaUnspecified > 0`, `PoolManager` reduces the trader's output credit (or increases the trader's input debt on exact-output swaps) by `hookDeltaUnspecified` in the **unspecified currency**, and credits that exact amount to the Hook inside `PoolManager`.
@@ -104,22 +104,25 @@ Six of the 17 blocks (`Arb recapture`, `Buy and sell tax`, `Auto burn`, `Fee sha
   - Let $Y_{\text{out}} = \text{uint128}(\text{unspecifiedDelta})$ be the gross output tokens produced by the pool swap.
 
 #### The Single-Pass Waterfall Invariant
-Instead of each block calling `PoolManager.take()` or `donate()` separately (which wastes gas and risks rounding drift), `AfterSwapDeltaAggregator` computes each enabled block's slice from $Y_{\text{out}}$ using explicit floor rounding (`Math.mulDiv(Y_out, bps, 10_000, Math.Rounding.Floor)`):
+Instead of each block calling `PoolManager.take()` or `donate()` separately (which wastes gas and risks rounding drift), `AfterSwapDeltaAggregator` computes each enabled block's slice from $Y_{\text{out}}$ using explicit floor rounding (`Math.mulDiv(Y_out, bps, 10_000, Math.Rounding.Floor)` on exact-input swaps, and `Math.Rounding.Ceil` on exact-output added input cost):
 
-| Order | Block | Trigger Condition | Cut Formula (Floor Rounded) | Settlement Destination |
+| Order | Block | Trigger Condition | Cut Formula (Exact-Input Floor Rounded) | Settlement Destination |
 | :--- | :--- | :--- | :--- | :--- |
+| **0** | **`Protocol Royalty`** | Every swap on registered pools | $\Delta_{\text{royalty}} = \lfloor Y_{\text{out}} \times 5 / 10000 \rfloor$ | ERC-6909 claim to `PROTOCOL_ROYALTY_RECIPIENT` (`0x576e...960A`) |
 | **1** | **`Arb recapture`** | Price moved past external/TWAP band | $\Delta_{\text{arb}} = \lfloor \text{arbProfit} \times \text{recaptureBps} / 10000 \rfloor$ | `PoolManager.donate()` to in-range LPs |
 | **2** | **`Buy and sell tax`** | Buy (`buyTaxBps > 0`) or Sell (`sellTaxBps > 0`) | $\Delta_{\text{tax}} = \lfloor Y_{\text{out}} \times \text{taxBps} / 10000 \rfloor$ | ERC-6909 claim to `taxRecipient` |
-| **3** | **`Auto burn`** | Buy swap (`isBuy == true`) | $\Delta_{\text{burn}} = \lfloor Y_{\text{out}} \times \text{burnBps} / 10000 \rfloor$ | `PoolManager.take()` to `0xdead` (or token `.burn()`) |
-| **4** | **`Fee sharing`** | Every swap | $\Delta_{\text{share}} = \lfloor Y_{\text{out}} \times \text{shareBps} / 10000 \rfloor$ | ERC-6909 claim split to creator/protocol |
-| **5** | **`LP rewards`** | Buy swap (`isBuy == true`) | $\Delta_{\text{lp}} = \lfloor Y_{\text{out}} \times \text{lpRewardBps} / 10000 \rfloor$ | `PoolManager.donate()` to active LPs |
-| **6** | **`King of the Pool`** | Buy swap (`isBuy == true`) | $\Delta_{\text{king}} = \lfloor Y_{\text{out}} \times \text{potBps} / 10000 \rfloor$ | ERC-6909 claim added to `_kingPot[poolId]` |
+| **3** | **`Auto burn`** | Buy swap & `unspecifiedCurrency == projectCurrency` | $\Delta_{\text{burn}} = \lfloor Y_{\text{out}} \times \text{burnBps} / 10000 \rfloor$ | `PoolManager.take()` + `ERC20Burnable.burn()` (or `0xdEaD`) |
+| **4** | **`Fee sharing`** | Every swap | $\Delta_{\text{share}} = \lfloor Y_{\text{out}} \times \text{shareBps} / 10000 \rfloor$ | ERC-6909 claim split to primary/secondary recipients |
+| **5** | **`LP rewards`** | Buy swap (`isBuy == true` & `L > 0`) | $\Delta_{\text{lp}} = \lfloor Y_{\text{out}} \times \text{lpRewardBps} / 10000 \rfloor$ | `PoolManager.donate()` to active LPs |
+| **6** | **`King of the Pool`** | Buy swap & `unspecifiedCurrency == projectCurrency` | $\Delta_{\text{king}} = \lfloor Y_{\text{out}} \times \text{potBps} / 10000 \rfloor$ | ERC-6909 claim added to `_kingStates[poolId].pot` |
+| **7** | **`Referral split`** | Every swap (`referralBps > 0`) | $\Delta_{\text{ref}} = \lfloor Y_{\text{out}} \times \text{referralBps} / 10000 \rfloor$ | ERC-6909 claim to bound referrer (or `defaultRecipient`) |
+| **8** | **`Auto buyback`** | Every swap (`buybackBps > 0`) | $\Delta_{\text{bb}} = \lfloor Y_{\text{out}} \times \text{buybackBps} / 10000 \rfloor$ | Accumulated as ERC-6909 reserve; donated to LPs below `triggerFloorTick` |
 
 #### Aggregate Cap & Conservation Check
-$$\Delta_{\text{total}} = \Delta_{\text{arb}} + \Delta_{\text{tax}} + \Delta_{\text{burn}} + \Delta_{\text{share}} + \Delta_{\text{lp}} + \Delta_{\text{king}} \le \lfloor Y_{\text{out}} \times \text{MAX\_AGGREGATE\_CUT\_BPS} / 10000 \rfloor$$
+$$\Delta_{\text{total}} = \Delta_{\text{royalty}} + \Delta_{\text{arb}} + \Delta_{\text{tax}} + \Delta_{\text{burn}} + \Delta_{\text{share}} + \Delta_{\text{lp}} + \Delta_{\text{king}} + \Delta_{\text{ref}} + \Delta_{\text{bb}} \le \lfloor Y_{\text{out}} \times \text{MAX\_AGGREGATE\_AFTER\_SWAP\_BPS} / 10000 \rfloor$$
 
-- Every slice is resolved with `PoolManager` (via batched ERC-6909 `mint`, `donate`, or `take`) so that the Hook's net delta with `PoolManager` at the end of `afterSwap` is **strictly zero** after returning `toInt128(Delta_total)`.
-- Next, **`Swap rewards`** records swap points (storage/event only, zero delta).
+- Every slice is resolved with `PoolManager` (via batched ERC-6909 `mint`, `burn`, `donate`, or `take`) so that the Hook's net delta with `PoolManager` at the end of `afterSwap` is **strictly zero** after returning `toInt128(Delta_total)`.
+- Next, **`Swap rewards`** records swap points on the post-cut net volume (`grossUnspecifiedAmount - totalCutAmount`; storage/event only, zero delta).
 - Finally, **`Limit orders`** checks if `preSwapTick -> postSwapTick` crossed any initialized limit order ticks and fills them.
 
 ---

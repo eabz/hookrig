@@ -16,6 +16,7 @@ import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/Pool
 import {HookPermissionMasks} from "./libraries/HookPermissionMasks.sol";
 import {PoolTokenDir} from "./libraries/PoolTokenDir.sol";
 import {TransientContext} from "./libraries/TransientContext.sol";
+import {IMsgSender} from "./interfaces/IMsgSender.sol";
 import {HookRigBase} from "./base/HookRigBase.sol";
 import {FeeAggregator} from "./base/FeeAggregator.sol";
 import {AfterSwapDeltaAggregator} from "./base/AfterSwapDeltaAggregator.sol";
@@ -29,6 +30,7 @@ import {WalletCapBlock} from "./blocks/token-rules/WalletCapBlock.sol";
 import {VestingSellCapBlock} from "./blocks/token-rules/VestingSellCapBlock.sol";
 import {SwapRewardsBlock} from "./blocks/rewards/SwapRewardsBlock.sol";
 import {KingOfThePoolLogic} from "./blocks/rewards/KingOfThePoolBlock.sol";
+import {AutoBuybackLogic} from "./blocks/rewards/AutoBuybackBlock.sol";
 import {LimitOrdersBlock} from "./blocks/trading/LimitOrdersBlock.sol";
 import {TWAMMBlock} from "./blocks/trading/TWAMMBlock.sol";
 import {OracleBlock, OracleLogic} from "./blocks/trading/OracleBlock.sol";
@@ -252,11 +254,9 @@ contract HookRigOrchestrator is
         PoolRuntimeMeta storage meta = _poolMeta[poolId];
         uint32 bitmap = meta.enabledBlocksBitmap;
         address user = _resolveUser(sender, hookData);
+        bool isCurve = meta.isLaunchpadPool && sender == meta.authorizedCurve;
 
-        if (
-            (bitmap & HookPermissionMasks.BIT_ACCESS_CONTROL) != 0
-                && !(meta.isLaunchpadPool && sender == meta.authorizedCurve)
-        ) {
+        if ((bitmap & HookPermissionMasks.BIT_ACCESS_CONTROL) != 0 && !isCurve) {
             _verifyAccess(poolId, user, hookData, true);
         }
 
@@ -270,19 +270,16 @@ contract HookRigOrchestrator is
             }
         }
 
-        if (
-            (bitmap & (HookPermissionMasks.BIT_MEV_PROTECTION | HookPermissionMasks.BIT_JIT_GUARD)) != 0
-                && !(meta.isLaunchpadPool && sender == meta.authorizedCurve)
-        ) {
+        if ((bitmap & (HookPermissionMasks.BIT_MEV_PROTECTION | HookPermissionMasks.BIT_JIT_GUARD)) != 0 && !isCurve) {
             _recordLPAddition(poolId, sender, user, params);
         }
 
-        if (
-            (bitmap & HookPermissionMasks.BIT_AUTO_BUYBACK) != 0
-                && (_autoBuybackStates[poolId].reserveByCurrency[key.currency0] > 0
-                    || _autoBuybackStates[poolId].reserveByCurrency[key.currency1] > 0)
-        ) {
-            TransientContext.markLiquidityAdded(poolId);
+        if ((bitmap & HookPermissionMasks.LP_DONATION_BLOCKS_MASK) != 0) {
+            _lastLiquidityAddBlock[poolId] = block.number;
+        }
+
+        if ((bitmap & HookPermissionMasks.WALLET_RULE_BLOCKS_MASK) != 0 && !isCurve) {
+            AccessControlLogic.enforceTwoSidedLiquidity(poolManager, poolId, params);
         }
 
         return IHooks.beforeAddLiquidity.selector;
@@ -296,7 +293,6 @@ contract HookRigOrchestrator is
     ) internal virtual override returns (bytes4) {
         PoolId poolId = key.toId();
         uint32 bitmap = _poolMeta[poolId].enabledBlocksBitmap;
-        address user = _resolveUser(sender, hookData);
 
         if ((bitmap & HookPermissionMasks.BIT_ORACLE) != 0) {
             (, int24 currentTick,,) = StateLibrary.getSlot0(poolManager, poolId);
@@ -304,7 +300,7 @@ contract HookRigOrchestrator is
         }
 
         if ((bitmap & (HookPermissionMasks.BIT_MEV_PROTECTION | HookPermissionMasks.BIT_JIT_GUARD)) != 0) {
-            _enforceJITGuardOnRemove(poolId, sender, user, params);
+            _enforceJITGuardOnRemove(poolId, sender, _resolveUser(sender, hookData), params);
         }
 
         return IHooks.beforeRemoveLiquidity.selector;
@@ -317,16 +313,15 @@ contract HookRigOrchestrator is
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         PoolId poolId = key.toId();
-
-        if (TransientContext.isInternalHookExecution(poolId)) {
-            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        uint32 bitmap = _poolMeta[poolId].enabledBlocksBitmap;
+        if ((bitmap & HookPermissionMasks.BIT_ACCESS_CONTROL) != 0) {
+            _verifyAccess(poolId, _resolveUser(sender, hookData), hookData, false);
         }
 
-        uint32 bitmap = _poolMeta[poolId].enabledBlocksBitmap;
-        address trader = _resolveUser(sender, hookData);
-
-        if ((bitmap & HookPermissionMasks.BIT_ACCESS_CONTROL) != 0) {
-            _verifyAccess(poolId, trader, hookData, false);
+        if ((bitmap & HookPermissionMasks.LP_DONATION_BLOCKS_MASK) != 0) {
+            AutoBuybackLogic.flushPendingDonations(
+                _autoBuybackStates, totalLPRewardsDonated, _lastLiquidityAddBlock, poolManager, key
+            );
         }
 
         (uint160 preSqrtPriceX96, int24 preTick,,) = StateLibrary.getSlot0(poolManager, poolId);
@@ -353,17 +348,14 @@ contract HookRigOrchestrator is
         bytes calldata hookData
     ) internal virtual override returns (bytes4, int128) {
         PoolId poolId = key.toId();
-        if (TransientContext.isInternalHookExecution(poolId)) {
-            return (IHooks.afterSwap.selector, 0);
-        }
-
         int128 hookDeltaUnspecified =
-            _runAfterSwapPipeline(poolId, _resolveUser(sender, hookData), key, params, swapDelta);
+            _runAfterSwapPipeline(poolId, sender, _resolveUser(sender, hookData), key, params, swapDelta);
         return (IHooks.afterSwap.selector, hookDeltaUnspecified);
     }
 
     function _runAfterSwapPipeline(
         PoolId poolId,
+        address sender,
         address trader,
         PoolKey calldata key,
         SwapParams calldata params,
@@ -408,7 +400,9 @@ contract HookRigOrchestrator is
         if ((bitmap & HookPermissionMasks.BIT_VESTING_SELL_CAP) != 0 && !ctx.isBuy) {
             uint256 projectTokensSold =
                 ctx.isExactInput ? ctx.settledSpecifiedAmount : (ctx.grossUnspecifiedAmount + totalCutAmount);
-            _enforceVestingSellCap(poolId, ctx.projectCurrency, ctx.trader, projectTokensSold);
+            _enforceVestingSellCap(
+                poolManager, poolId, ctx.projectCurrency, ctx.trader, ctx.trader == sender, projectTokensSold
+            );
         }
 
         if ((bitmap & HookPermissionMasks.BIT_SWAP_REWARDS) != 0) {
@@ -434,12 +428,31 @@ contract HookRigOrchestrator is
         _payoutERC6909Claim(currency, recipient, reward);
     }
 
-    /// @notice Allows an authorized LaunchCurve to seed initial sniper surcharges into Round #1 King of the Pool pot
-    ///         (or into `poolAdmin` ERC-6909 claims if `currency` is not the pool's project token).
+    /// @notice Allows an authorized LaunchCurve to seed initial sniper surcharges into the Round #1 King of the Pool
+    ///         pot. Reverts when the pool has no live King pot (curves then route the surcharge to graduation LP).
     function seedKingPotFromLaunchCurve(PoolId poolId, Currency currency, uint256 amount) external override {
-        KingOfThePoolLogic.seedPotFromLaunchCurve(
-            _kingStates, _poolMeta, poolClaims, poolId, currency, amount, launchpadFactory, owner()
-        );
+        KingOfThePoolLogic.seedPotFromLaunchCurve(_kingStates, _poolMeta, poolId, currency, amount, launchpadFactory);
+    }
+
+    function claimLimitOrder(PoolKey calldata key, uint256 orderId) external override nonReentrant {
+        _claimLimitOrder(key, orderId, 0);
+    }
+
+    function claimLimitOrder(PoolKey calldata key, uint256 orderId, uint256 minAmountOut)
+        external
+        override
+        nonReentrant
+    {
+        _claimLimitOrder(key, orderId, minAmountOut);
+    }
+
+    /// @notice Attributes limit-order claim swaps to the order maker instead of the internal executor.
+    function _resolveUser(address routerSender, bytes calldata hookData) internal view override returns (address) {
+        if (routerSender == address(_limitOrderExecutor) && routerSender != address(0)) {
+            address maker = IMsgSender(routerSender).msgSender();
+            if (maker != address(0)) return maker;
+        }
+        return super._resolveUser(routerSender, hookData);
     }
 
     function _protocolRoyaltyBps() internal view virtual override returns (uint16) {

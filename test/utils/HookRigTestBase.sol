@@ -282,6 +282,13 @@ abstract contract HookRigTestBase is Test {
         );
     }
 
+    /// @dev LP donation cuts are queued and paid out by the first swap of a later block; this rolls one block and
+    ///      makes a small swap so the queued donation reaches the LPs.
+    function _flushLPDonations(PoolKey memory key) internal {
+        vm.roll(block.number + 1);
+        _swapExactIn(carol, key, false, 1 ether, "");
+    }
+
     function _swapExactOut(
         address trader,
         PoolKey memory key,

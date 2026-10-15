@@ -57,15 +57,16 @@ library TransientContext {
         active = (val == 1);
     }
 
-    function getWalletCapExpectedBalance(PoolId poolId, address user) internal view returns (uint256 bal) {
-        bytes32 slot = keccak256(abi.encodePacked(WALLET_CAP_NAMESPACE, PoolId.unwrap(poolId), user));
+    /// @dev Keyed by project token (not PoolId) so batched buys across several pools of one token share one cache.
+    function getWalletCapExpectedBalance(address token, address user) internal view returns (uint256 bal) {
+        bytes32 slot = keccak256(abi.encodePacked(WALLET_CAP_NAMESPACE, token, user));
         assembly ("memory-safe") {
             bal := tload(slot)
         }
     }
 
-    function setWalletCapExpectedBalance(PoolId poolId, address user, uint256 bal) internal {
-        bytes32 slot = keccak256(abi.encodePacked(WALLET_CAP_NAMESPACE, PoolId.unwrap(poolId), user));
+    function setWalletCapExpectedBalance(address token, address user, uint256 bal) internal {
+        bytes32 slot = keccak256(abi.encodePacked(WALLET_CAP_NAMESPACE, token, user));
         assembly ("memory-safe") {
             tstore(slot, bal)
         }

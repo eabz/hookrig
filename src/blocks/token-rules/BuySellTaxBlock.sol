@@ -99,7 +99,9 @@ library BuySellTaxLogic {
             revert TaxExceedsHardCap(newBuyTaxBps, newSellTaxBps);
         }
         IHookRigBlock.BuySellTaxParams storage cfg = configs[poolId];
-        if (cfg.decayOnly && (newBuyTaxBps > cfg.buyTaxBps || newSellTaxBps > cfg.sellTaxBps)) {
+        // Taxes can only ever decrease after registration (whatever `decayOnly` says), so a pool admin cannot
+        // raise the tax on holders who bought under a lower one.
+        if (newBuyTaxBps > cfg.buyTaxBps || newSellTaxBps > cfg.sellTaxBps) {
             revert TaxIncreaseForbiddenInDecayOnlyMode();
         }
         if ((newBuyTaxBps > 0 || newSellTaxBps > 0) && newRecipient == address(0)) {

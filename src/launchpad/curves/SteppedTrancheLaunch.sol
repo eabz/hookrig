@@ -16,6 +16,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {ITokenLaunchpad} from "../../interfaces/ITokenLaunchpad.sol";
 import {IHookRigOrchestrator} from "../../interfaces/IHookRigOrchestrator.sol";
+import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
 /// @title SteppedTrancheLaunch
 /// @notice Curve Model #2: Anti-bundle stepped tranche curve with active `WalletCap` and `AntiSnipe` surcharges
@@ -42,6 +43,8 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
     uint256 public realQuoteRaised;
     uint256 public curveTokensSold;
     uint256 public totalSurchargeCollected;
+    /// @notice Tranche price paid by the latest curve buy; graduation opens the pool at this price.
+    uint256 public lastFillPriceQ96;
 
     error AlreadyInitialized();
     error CurveNotActive();
@@ -123,6 +126,7 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
 
         {
             uint256 priceQ96 = currentMarginalPriceQ96();
+            lastFillPriceQ96 = priceQ96;
             uint256 remainingTokens = trancheConfig.curveTokenAllocation - curveTokensSold;
             tokensOut = Math.mulDiv(netQuoteForTokens, uint256(1) << 96, priceQ96, Math.Rounding.Floor);
             if (tokensOut > remainingTokens) {
@@ -207,12 +211,17 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
     function _graduateToV4() internal {
         launchState = LaunchState.Graduated;
 
-        uint256 kingPotSeed =
-            Math.mulDiv(totalSurchargeCollected, trancheConfig.surchargeToKingPotBps, 10_000, Math.Rounding.Floor);
+        IHookRigOrchestrator hook = IHookRigOrchestrator(address(poolKey.hooks));
+        // Seed the King pot only when the pool runs King of the Pool; otherwise every surcharge deepens the LP.
+        uint256 kingPotSeed = hook.isBlockEnabled(poolId, IHookRigBlock.BlockId.KingOfThePool)
+            ? Math.mulDiv(totalSurchargeCollected, trancheConfig.surchargeToKingPotBps, 10_000, Math.Rounding.Floor)
+            : 0;
         uint256 extraLpQuote = totalSurchargeCollected - kingPotSeed;
         uint256 quoteToSeed = realQuoteRaised + extraLpQuote;
 
-        uint256 finalPriceQ96 = currentMarginalPriceQ96();
+        // Price of the last fill, not of `currentTrancheIndex()`: a final buy that crosses a tranche boundary only by
+        // rounding dust would otherwise open the pool at a price no buyer paid.
+        uint256 finalPriceQ96 = lastFillPriceQ96 > 0 ? lastFillPriceQ96 : currentMarginalPriceQ96();
         uint256 continuousLpTokens = Math.mulDiv(quoteToSeed, uint256(1) << 96, finalPriceQ96, Math.Rounding.Floor);
         uint256 availableTokens = IERC20(projectToken).balanceOf(address(this));
         if (continuousLpTokens > availableTokens) {
@@ -242,7 +251,6 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
             graduationSqrtPriceX96 = TickMath.MAX_SQRT_PRICE - 1;
         }
 
-        IHookRigOrchestrator hook = IHookRigOrchestrator(address(poolKey.hooks));
         poolManager.initialize(poolKey, graduationSqrtPriceX96);
         hook.notifyPoolGraduated(poolId);
 

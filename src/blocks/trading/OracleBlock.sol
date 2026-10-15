@@ -5,9 +5,11 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 import {HookPermissionMasks} from "../../libraries/HookPermissionMasks.sol";
 import {TWAMMLogic} from "./TWAMMBlock.sol";
+import {IHasPoolManager} from "./LimitOrdersBlock.sol";
 import {DynamicFeeLogic} from "../fees/DynamicFeeBlock.sol";
 import {ManagedFeeLogic} from "../fees/ManagedFeeBlock.sol";
 import {ArbRecaptureLogic} from "../protection/ArbRecaptureBlock.sol";
@@ -77,41 +79,51 @@ library OracleLogic {
         uint32 elapsed = currentTs - obs.blockTimestamp;
         if (elapsed == 0) return;
 
-        int256 diff = int256(currentTick) - int256(obs.lastTick);
-        int256 maxChange = int256(uint256(elapsed)) * int256(MAX_ORACLE_TICK_DELTA_PER_SEC);
-        int256 nextTick = int256(currentTick);
-        if (diff > maxChange) {
-            nextTick = int256(obs.lastTick) + maxChange;
-        } else if (diff < -maxChange) {
-            nextTick = int256(obs.lastTick) - maxChange;
-        }
-        if (nextTick > int256(TickMath.MAX_TICK)) {
-            nextTick = int256(TickMath.MAX_TICK);
-        } else if (nextTick < int256(TickMath.MIN_TICK)) {
-            nextTick = int256(TickMath.MIN_TICK);
-        }
-        currentTick = int24(nextTick);
+        currentTick = _clampTick(obs.lastTick, currentTick, elapsed);
 
-        obs.tickCumulative += int56(obs.lastTick) * int56(uint56(elapsed));
+        // The pre-swap tick passed here is the price that held since the previous checkpoint, so it (not the
+        // previous checkpoint's tick) weights the elapsed interval, as in the Uniswap v3 oracle.
+        obs.tickCumulative += int56(currentTick) * int56(uint56(elapsed));
         obs.lastTick = currentTick;
         obs.blockTimestamp = currentTs;
 
         emit OracleCheckpointed(poolId, currentTick, obs.tickCumulative, currentTs);
     }
 
-    function observeAtCurrentTime(mapping(PoolId => OracleObservation) storage observations, PoolId poolId)
-        external
-        view
-        returns (int24 lastTick, int56 extrapolatedTickCumulative, uint32 lastTimestamp)
-    {
+    /// @notice Extrapolates the cumulative to now with the live pool tick (clamped like a checkpoint), which is the
+    ///         price that has held since the last checkpoint.
+    function observeAtCurrentTime(
+        mapping(PoolId => OracleObservation) storage observations,
+        IPoolManager manager,
+        PoolId poolId
+    ) external view returns (int24 lastTick, int56 extrapolatedTickCumulative, uint32 lastTimestamp) {
         OracleObservation storage obs = observations[poolId];
         lastTick = obs.lastTick;
         lastTimestamp = obs.blockTimestamp;
         extrapolatedTickCumulative = obs.tickCumulative;
         if (obs.initialized && uint32(block.timestamp) > obs.blockTimestamp) {
             uint32 elapsed = uint32(block.timestamp) - obs.blockTimestamp;
-            extrapolatedTickCumulative += int56(obs.lastTick) * int56(uint56(elapsed));
+            (, int24 liveTick,,) = StateLibrary.getSlot0(manager, poolId);
+            extrapolatedTickCumulative += int56(_clampTick(obs.lastTick, liveTick, elapsed)) * int56(uint56(elapsed));
         }
+    }
+
+    /// @dev Limits the move from `lastTick` to MAX_ORACLE_TICK_DELTA_PER_SEC per elapsed second.
+    function _clampTick(int24 lastTick, int24 tick, uint32 elapsed) private pure returns (int24) {
+        int256 diff = int256(tick) - int256(lastTick);
+        int256 maxChange = int256(uint256(elapsed)) * int256(MAX_ORACLE_TICK_DELTA_PER_SEC);
+        int256 nextTick = int256(tick);
+        if (diff > maxChange) {
+            nextTick = int256(lastTick) + maxChange;
+        } else if (diff < -maxChange) {
+            nextTick = int256(lastTick) - maxChange;
+        }
+        if (nextTick > int256(TickMath.MAX_TICK)) {
+            nextTick = int256(TickMath.MAX_TICK);
+        } else if (nextTick < int256(TickMath.MIN_TICK)) {
+            nextTick = int256(TickMath.MIN_TICK);
+        }
+        return int24(nextTick);
     }
 }
 
@@ -142,6 +154,7 @@ abstract contract OracleBlock is IHookRigBlock {
         view
         returns (int24 lastTick, int56 extrapolatedTickCumulative, uint32 lastTimestamp)
     {
-        return OracleLogic.observeAtCurrentTime(_oracleObservations, poolId);
+        return
+            OracleLogic.observeAtCurrentTime(_oracleObservations, IHasPoolManager(address(this)).poolManager(), poolId);
     }
 }

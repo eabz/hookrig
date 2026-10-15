@@ -18,6 +18,8 @@ import {HookPermissionMasks} from "../../src/libraries/HookPermissionMasks.sol";
 import {TransientContext} from "../../src/libraries/TransientContext.sol";
 import {HookRigBase} from "../../src/base/HookRigBase.sol";
 import {LimitOrdersLogic} from "../../src/blocks/trading/LimitOrdersBlock.sol";
+import {KingOfThePoolLogic} from "../../src/blocks/rewards/KingOfThePoolBlock.sol";
+import {TWAMMLogic} from "../../src/blocks/trading/TWAMMBlock.sol";
 import {
     FairLaunchPresetHook,
     KingOfThePoolLaunchPresetHook,
@@ -320,7 +322,8 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         // 1. Exact-Input Buy (!zeroForOne, amountSpecified < 0)
         _swapExactIn(alice, key, false, 500 ether, "");
 
-        // 2. Exact-Output Buy (!zeroForOne, amountSpecified > 0)
+        // 2. Exact-Output Buy (!zeroForOne, amountSpecified > 0) reverts: AutoBurn would otherwise be skipped
+        vm.expectRevert();
         _swapExactOut(bob, key, false, 200 ether, "");
 
         // 3. Exact-Input Sell (zeroForOne, amountSpecified < 0)
@@ -403,8 +406,8 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         orchestrator.seedKingPotFromLaunchCurve(poolId, currency0, 100 ether);
 
         // 3. Authorized launchpadFactory can call seedKingPotFromLaunchCurve:
-        //    - Project currency (`currency1`) seeds the KingOfThePool pot directly
-        //    - Quote currency (`currency0`) credits the pool admin's (`address(this)`) ERC-6909 claim ledger so currencies never mix
+        //    - The first seed sets the KingOfThePool pot currency
+        //    - A seed in another currency reverts: surcharges never go to the pool admin, and currencies never mix
         vm.prank(address(launchpadFactory));
         orchestrator.seedKingPotFromLaunchCurve(poolId, currency1, 0);
         vm.prank(address(launchpadFactory));
@@ -413,8 +416,9 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         assertEq(pot, 50 ether);
 
         vm.prank(address(launchpadFactory));
+        vm.expectRevert(abi.encodeWithSelector(KingOfThePoolLogic.KingPotSeedNotAccepted.selector, poolId));
         orchestrator.seedKingPotFromLaunchCurve(poolId, currency0, 25 ether);
-        assertEq(orchestrator.poolClaims(poolId, currency0, address(this)), 25 ether);
+        assertEq(orchestrator.poolClaims(poolId, currency0, address(this)), 0);
 
         // 4. Withdrawing more claims than available reverts with InsufficientClaimBalance
         vm.prank(alice);
@@ -585,12 +589,19 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
 
         // Now move tick below -10 and execute a sell (`zeroForOne == false`) while tick <= -10
         // so the accumulated currency0 ERC-6909 reserve is burned and donated to LPs!
+        // The trigger moves the reserve into the queued LP donation; a swap in a later block pays it out.
         _swapExactIn(bob, key, true, 25_000 ether, "");
+        assertGt(orchestrator.pendingLPDonation(poolId, currency0), 0);
+        vm.roll(block.number + 1);
         _swapExactIn(alice, key, false, 1000 ether, "");
 
-        // Verify prior currency0 ERC-6909 buyback reserve was burned and donated (only 5 bps protocol royalty claim remains)
+        // Verify prior currency0 ERC-6909 buyback reserve was donated: only the royalty claim and the reserve
+        // re-queued by the last swap remain as hook claims.
         uint256 royaltyClaim0 = orchestrator.poolClaims(poolId, currency0, orchestrator.PROTOCOL_ROYALTY_RECIPIENT());
-        assertEq(poolManager.balanceOf(address(orchestrator), currency0.toId()), royaltyClaim0);
+        assertEq(
+            poolManager.balanceOf(address(orchestrator), currency0.toId()),
+            royaltyClaim0 + orchestrator.pendingLPDonation(poolId, currency0)
+        );
         assertGt(orchestrator.totalLPRewardsDonated(poolId), orcBalBefore - royaltyClaim0);
     }
 
@@ -644,4 +655,281 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         vm.warp(block.timestamp + 86_401);
         _swapExactIn(bob, key, true, 50 ether, "");
     }
+
+    // =========================================================================
+    // 5. Audit & Stateful Fuzzing Regression Suite
+    // =========================================================================
+
+    /// @notice Regression #1: Preset hook permission flag validation (`#40, #42`), `poolAdmin` caller authorization
+    ///         on `registerPoolStack` (`#41, #58`), and mandatory `afterInitialize` on all active bitmaps (`#2`).
+    function test_Regression01_PresetPermissionEnforcementAndPoolAdminAuth() public {
+        // 1. Every non-zero bitmap enables afterInitialize so launchpad pools always run _afterInitialize
+        Hooks.Permissions memory twammPerms = HookPermissionMasks.permissionsForBitmap(HookPermissionMasks.BIT_TWAMM);
+        assertTrue(twammPerms.beforeInitialize && twammPerms.afterInitialize);
+
+        // 2. Deploying FairLaunchPresetHook (no BEFORE_INITIALIZE_FLAG) and attempting to register BIT_TWAMM reverts
+        uint160 fairFlags =
+            _flagsFromPermissions(HookPermissionMasks.permissionsForBitmap(HookPermissionMasks.PRESET_FAIR_LAUNCH));
+        address presetAddr = address(uint160(0x6666000000000000000000000000000000000000) | fairFlags);
+        deployCodeTo("HookRigPresets.sol:FairLaunchPresetHook", abi.encode(poolManager, owner), presetAddr);
+        FairLaunchPresetHook fairHook = FairLaunchPresetHook(payable(presetAddr));
+
+        IHookRigBlock.PoolStackConfig memory badTwammCfg;
+        badTwammCfg.enabledBlocksBitmap = HookPermissionMasks.BIT_TWAMM;
+        PoolKey memory fairKey = _defaultPoolKey(IHooks(presetAddr));
+        vm.expectRevert(
+            abi.encodeWithSelector(IHookRigOrchestrator.InvalidBlockBitmap.selector, HookPermissionMasks.BIT_TWAMM)
+        );
+        fairHook.registerPoolStack(fairKey, badTwammCfg);
+
+        // 3. Setting a non-zero poolAdmin requires msg.sender == config.poolAdmin (or launchpadFactory)
+        IHookRigBlock.PoolStackConfig memory adminCfg;
+        adminCfg.enabledBlocksBitmap = HookPermissionMasks.BIT_DYNAMIC_FEE;
+        adminCfg.poolAdmin = alice;
+        adminCfg.dynamicFee =
+            IHookRigBlock.DynamicFeeParams({baseFee: 3000, maxFee: 10_000, volatilityTickThreshold: 50});
+
+        PoolKey memory adminKey = _defaultPoolKey(IHooks(address(orchestrator)));
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(HookRigBase.OnlyPoolAdmin.selector, bob));
+        orchestrator.registerPoolStack(adminKey, adminCfg);
+
+        vm.prank(alice);
+        orchestrator.registerPoolStack(adminKey, adminCfg);
+    }
+
+    /// @notice Regression #2: `DynamicFee` EWMA ceiling & intra-block tick preservation (`#56, #57`),
+    ///         `MEVProtection` first-swap anchor & dust-swap anti-griefing (`#61, #62`),
+    ///         `ArbRecapture` referenceTick preservation (`#11–#13`), and `CircuitBreaker` bounded rollover (`#68`).
+    function test_Regression02_DynamicFee_MEVProtection_ArbRecapture_CircuitBreaker_Hardening() public {
+        // 1. DynamicFee + ArbRecapture: sub-threshold swaps do not advance ArbRecapture referenceTick,
+        //    so cumulative tick displacement across sub-threshold steps still triggers ArbRecapture!
+        IHookRigBlock.PoolStackConfig memory cfg;
+        cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_DYNAMIC_FEE | HookPermissionMasks.BIT_ARB_RECAPTURE;
+        cfg.dynamicFee = IHookRigBlock.DynamicFeeParams({baseFee: 3000, maxFee: 10_000, volatilityTickThreshold: 50});
+        cfg.arbRecapture = IHookRigBlock.ArbRecaptureParams({recaptureShareBps: 5000, arbTriggerTickDelta: 50});
+
+        (PoolKey memory key, PoolId poolId) = _initPoolWithStack(cfg);
+        _seedFullRangeLiquidity(key, 1_000_000 ether);
+
+        // Two sub-threshold swaps (~20 ticks < 50 trigger) cumulatively cross >= 50 ticks from referenceTick 0
+        _swapExactIn(alice, key, true, 1_000 ether, "");
+        assertEq(orchestrator.totalLPRewardsDonated(poolId), 0, "First sub-threshold step does not trigger recapture");
+
+        _swapExactIn(alice, key, true, 25_000 ether, "");
+        _flushLPDonations(key);
+        assertGt(
+            orchestrator.totalLPRewardsDonated(poolId),
+            0,
+            "Second step triggers ArbRecapture because referenceTick was not walked by first sub-threshold step"
+        );
+
+        // 2. MEVProtection: 1-tick dust swap does not arm opposite-direction lock for normal traders
+        IHookRigBlock.PoolStackConfig memory mevCfg;
+        mevCfg.enabledBlocksBitmap = HookPermissionMasks.BIT_MEV_PROTECTION;
+        mevCfg.mevProtection =
+            IHookRigBlock.MEVProtectionParams({maxTickDeltaPerSwap: 200, minLPHoldBlocks: 5, jitExitPenaltyBps: 100});
+
+        PoolKey memory mevKey = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: 10,
+            hooks: IHooks(address(orchestrator))
+        });
+        orchestrator.registerPoolStack(mevKey, mevCfg);
+        poolManager.initialize(mevKey, SQRT_PRICE_1_1);
+        _seedFullRangeLiquidity(mevKey, 1_000_000 ether);
+
+        // Tiny dust swap (0 or 1 tick) in direction zeroForOne=true does NOT lock out bob's opposite swap in same block
+        _swapExactIn(alice, mevKey, true, 1 wei, "");
+        _swapExactIn(bob, mevKey, false, 100 ether, "");
+    }
+
+    /// @notice Regression #3: `JITGuard` shared-router default-salt isolation (`#15–#20`) and
+    ///         `AutoBuyback` same-transaction JIT liquidity addition guard (`#55`).
+    function test_Regression03_JITGuardSharedRouterIsolation_And_AutoBuybackJITSandwichGuard() public {
+        // 1. JITGuard: Alice and Bob using the same trusted router with salt=0 have isolated hold timers
+        IHookRigBlock.PoolStackConfig memory jitCfg;
+        jitCfg.enabledBlocksBitmap = HookPermissionMasks.BIT_JIT_GUARD;
+        jitCfg.mevProtection =
+            IHookRigBlock.MEVProtectionParams({maxTickDeltaPerSwap: 0, minLPHoldBlocks: 10, jitExitPenaltyBps: 0});
+
+        (PoolKey memory jitKey,) = _initPoolWithStack(jitCfg);
+        ModifyLiquidityParams memory addParams =
+            ModifyLiquidityParams({tickLower: -600, tickUpper: 600, liquidityDelta: 10_000 ether, salt: bytes32(0)});
+        ModifyLiquidityParams memory remParams =
+            ModifyLiquidityParams({tickLower: -600, tickUpper: 600, liquidityDelta: -5_000 ether, salt: bytes32(0)});
+
+        // Alice adds liquidity at block N
+        vm.prank(alice);
+        router.modifyLiquidity(jitKey, addParams, "");
+
+        // At block N + 8, Bob adds liquidity with the same ticks and salt=0
+        vm.roll(block.number + 8);
+        vm.prank(bob);
+        router.modifyLiquidity(jitKey, addParams, "");
+
+        // At block N + 11 (past Alice's 10-block hold, despite Bob's add 3 blocks ago), Alice can remove cleanly!
+        vm.roll(block.number + 3);
+        vm.prank(alice);
+        router.modifyLiquidity(jitKey, remParams, "");
+
+        // 2. AutoBuyback: Adding liquidity in the same transaction suppresses floor buyback deployment
+        IHookRigBlock.PoolStackConfig memory bbCfg;
+        bbCfg.enabledBlocksBitmap = HookPermissionMasks.BIT_AUTO_BUYBACK | HookPermissionMasks.BIT_LP_REWARDS;
+        bbCfg.lpRewards = IHookRigBlock.LPRewardsParams({extraBuyFeeBps: 50});
+        bbCfg.autoBuyback =
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 300, triggerFloorTick: -5, minBuybackReserve: 1 ether});
+
+        PoolKey memory bbKey = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: 20,
+            hooks: IHooks(address(orchestrator))
+        });
+        orchestrator.registerPoolStack(bbKey, bbCfg);
+        poolManager.initialize(bbKey, SQRT_PRICE_1_1);
+        _seedFullRangeLiquidity(bbKey, 500_000 ether);
+
+        // Accumulate currency0 buyback reserve across blocks
+        _swapExactIn(alice, bbKey, false, 3000 ether, "");
+        vm.roll(block.number + 1);
+        _swapExactIn(bob, bbKey, true, 20_000 ether, "");
+        uint256 orcBalBefore = poolManager.balanceOf(address(orchestrator), currency0.toId());
+        assertGt(orcBalBefore, 1 ether);
+
+        // Add liquidity AND sell in the SAME transaction -> currency0 reserve is NOT burned/deployed to JIT LP!
+        vm.roll(block.number + 1);
+        this.executeSameTxJITAddAndSell(bbKey, addParams);
+        assertGe(
+            poolManager.balanceOf(address(orchestrator), currency0.toId()),
+            orcBalBefore,
+            "AutoBuyback must not deploy accumulated reserve in same tx as liquidity addition"
+        );
+    }
+
+    function executeSameTxJITAddAndSell(PoolKey memory bbKey, ModifyLiquidityParams memory addParams) external {
+        vm.prank(carol);
+        router.modifyLiquidity(bbKey, addParams, "");
+        _swapExactIn(alice, bbKey, false, 500 ether, "");
+    }
+
+    /// @notice Regression #4: `WalletCap` on-chain balance seeding on first sell (`#34–#36`) and
+    ///         `VestingSellCap` pre-settlement balance reconstruction at epoch initialization (`#30–#33`).
+    function test_Regression04_WalletCapFirstSell_And_VestingSellCapPostSettlementEpochInit() public {
+        // 1. WalletCap: Trader with existing ERC-20 balance selling first still has remaining balance enforced on buy
+        IHookRigBlock.PoolStackConfig memory wcCfg;
+        wcCfg.enabledBlocksBitmap = HookPermissionMasks.BIT_WALLET_CAP;
+        wcCfg.walletCap = IHookRigBlock.WalletCapParams({maxWalletBps: 100, sunsetBlocks: 1000}); // 1% cap
+
+        (PoolKey memory wcKey,) = _initPoolWithStack(wcCfg);
+        _seedFullRangeLiquidity(wcKey, 500_000 ether);
+
+        address whaleHolder = address(0xBEEF88);
+        uint256 onePercent = token1.totalSupply() / 100;
+        token0.transfer(whaleHolder, 100_000 ether);
+        token1.transfer(whaleHolder, onePercent); // Holds 100% of the 1% wallet cap via direct transfer (without changing totalSupply)
+        vm.startPrank(whaleHolder);
+        token0.approve(address(router), type(uint256).max);
+        token1.approve(address(router), type(uint256).max);
+        vm.stopPrank();
+
+        // Whale sells 10 ether, then tries to buy 50 ether (pushing above 1% cap) -> reverts because sell seeded balance!
+        _swapExactIn(whaleHolder, wcKey, false, 10 ether, "");
+        vm.expectRevert();
+        _swapExactIn(whaleHolder, wcKey, true, 50 ether, "");
+
+        // 2. VestingSellCap: Trader who received tokens via direct ERC-20 transfer cannot dump > maxDailySellBps on first sell
+        IHookRigBlock.PoolStackConfig memory vsCfg;
+        vsCfg.enabledBlocksBitmap = HookPermissionMasks.BIT_VESTING_SELL_CAP;
+        vsCfg.vestingSellCap = IHookRigBlock.VestingSellCapParams({maxDailySellBps: 1000}); // Max 10% per day
+
+        PoolKey memory vsKey = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: 30,
+            hooks: IHooks(address(orchestrator))
+        });
+        orchestrator.registerPoolStack(vsKey, vsCfg);
+        poolManager.initialize(vsKey, SQRT_PRICE_1_1);
+        _seedFullRangeLiquidity(vsKey, 500_000 ether);
+
+        address freshHolder = address(0xDEAD99);
+        token1.mint(freshHolder, 1000 ether);
+        vm.prank(freshHolder);
+        token1.approve(address(router), type(uint256).max);
+
+        // Attempting to sell 600 ether (60% of 1000 ether balance, leaving 400 ether post-settlement) must revert!
+        vm.expectRevert();
+        _swapExactIn(freshHolder, vsKey, false, 600 ether, "");
+
+        // Selling 60 ether (6% <= 10% cap) succeeds, and a second sell of 60 ether (total 120 > 100 ether cap) reverts!
+        _swapExactIn(freshHolder, vsKey, false, 60 ether, "");
+        vm.expectRevert();
+        _swapExactIn(freshHolder, vsKey, false, 60 ether, "");
+    }
+
+    /// @notice Regression #5: `LimitOrders` re-opening a filled tick bucket after price returns (`#25–#27`)
+    ///         and `TWAMM` 100% unswapped refund + dust order eviction (`#7–#9, #50, #66`).
+    function test_Regression05_LimitOrdersBucketReopen_And_TWAMMDustEvictionAndFullRefund() public {
+        IHookRigBlock.PoolStackConfig memory cfg;
+        cfg.enabledBlocksBitmap =
+            HookPermissionMasks.BIT_LIMIT_ORDERS | HookPermissionMasks.BIT_TWAMM | HookPermissionMasks.BIT_ORACLE;
+
+        (PoolKey memory key,) = _initPoolWithStack(cfg);
+        _seedFullRangeLiquidity(key, 500_000 ether);
+
+        // 1. Place limit order at tick -60, cross it, claim it, move tick back above -60, and place a new order at -60
+        vm.prank(alice);
+        uint256 id1 = orchestrator.placeLimitOrder(key, -60, true, 50 ether);
+
+        _swapExactIn(bob, key, true, 25_000 ether, "");
+
+        vm.prank(alice);
+        orchestrator.claimLimitOrder(key, id1);
+
+        // Swap back so currentTick > -60
+        _swapExactIn(bob, key, false, 30_000 ether, "");
+
+        // Alice can now place a new limit order at tick -60 AND cancel it before fill (proving bucket re-opened!)
+        vm.prank(alice);
+        uint256 id2 = orchestrator.placeLimitOrder(key, -60, true, 50 ether);
+        vm.prank(alice);
+        orchestrator.cancelLimitOrder(key, id2);
+
+        // 2. TWAMM: new orders are disabled (deposits would never swap), so no funds can be escrowed
+        vm.prank(alice);
+        vm.expectRevert(TWAMMLogic.TWAMMOrdersDisabled.selector);
+        orchestrator.submitTWAMMOrder(key, true, 100 ether, 3600);
+    }
+
+    /// @notice Regression #6: `KingOfThePool` zero-cut buy guard (`#43–#45`) and single-currency pot purity (`#3–#6, #10`).
+    function test_Regression06_KingOfThePoolSingleCurrencyPurityAndZeroCutGuard() public {
+        IHookRigBlock.PoolStackConfig memory cfg;
+        cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_KING_OF_THE_POOL | HookPermissionMasks.BIT_LP_REWARDS;
+        cfg.lpRewards = IHookRigBlock.LPRewardsParams({extraBuyFeeBps: 50});
+        cfg.kingOfThePool = IHookRigBlock.KingOfThePoolParams({
+            potFeeOnBuyBps: 100, roundDurationSeconds: 600, minBuyAmountForReset: 1 wei
+        });
+
+        (PoolKey memory key, PoolId poolId) = _initPoolWithStack(cfg);
+        _seedFullRangeLiquidity(key, 500_000 ether);
+
+        // Alice makes a real buy -> becomes King of Round 1
+        _swapExactIn(alice, key, true, 100 ether, "");
+        (, address king1, uint256 pot1, uint64 deadline1) = orchestrator.getCurrentKing(poolId);
+        assertEq(king1, alice);
+        assertGt(pot1, 0);
+
+        // Advance time by 100s; Bob makes a 1-wei buy where potContribution rounds to 0 -> cannot steal crown or reset timer!
+        vm.warp(block.timestamp + 100);
+        _swapExactIn(bob, key, true, 1 wei, "");
+        (, address kingAfter,, uint64 deadlineAfter) = orchestrator.getCurrentKing(poolId);
+        assertEq(kingAfter, alice, "Zero-contribution dust buy must not steal King crown");
+        assertEq(deadlineAfter, deadline1, "Zero-contribution dust buy must not reset round deadline");
+    }
 }
+

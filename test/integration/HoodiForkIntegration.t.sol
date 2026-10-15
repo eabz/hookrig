@@ -46,8 +46,10 @@ contract HoodiForkIntegrationTest is Test {
             | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
     );
 
+    // FairLaunch (WalletCap + LPRewards) needs beforeAddLiquidity: WalletCap rejects one-sided range orders and
+    // LPRewards records liquidity adds for the queued-donation guard.
     uint160 internal constant FAIR_LAUNCH_HOOK_FLAGS = uint160(
-        Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
+        Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
             | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
     );
 
@@ -655,5 +657,100 @@ contract HoodiForkIntegrationTest is Test {
 
         // Prove that all 22 blocks (`0x3FFFFF`) were exercised across the 2,843 valid combinations
         assertEq(unionOfAllTestedBits, ALL_22_MASK, "All 22 blocks exercised across the 2,843 valid combinations");
+    }
+
+    /// @notice Verifies `SteppedTrancheLaunch` (with `KingOfThePool` Round #1 pot seeding) and `NativeTickLaunch`
+    ///         (Block-0 concentrated bands) end-to-end on the Ethereum Hoodi fork.
+    function test_HoodiFork_SteppedTrancheAndNativeTickLaunches() public {
+        _deployProtocolOnHoodi();
+
+        // 1. SteppedTrancheLaunch with KingOfThePool Round #1 quote-currency pot seeding
+        uint32 trancheBitmap = HookPermissionMasks.PRESET_KING_OF_THE_POOL_LAUNCH;
+        IHookRigBlock.PoolStackConfig memory trancheStack = _buildDefaultConfigForBitmap(trancheBitmap);
+
+        ITokenLaunchpad.LaunchTokenMetadata memory trancheMeta = ITokenLaunchpad.LaunchTokenMetadata({
+            name: "Hoodi Tranche Token",
+            symbol: "HTRN",
+            totalSupply: 1_000_000_000 ether,
+            creator: admin,
+            creatorVestingBps: 500,
+            vestingDurationSeconds: 30 days
+        });
+
+        uint128 basePriceQ96 = uint128((uint256(1) << 96) / 10_000_000);
+        uint128 stepIncrementQ96 = uint128((uint256(1) << 96) / 50_000_000);
+
+        ITokenLaunchpad.SteppedTrancheConfig memory trancheCfg = ITokenLaunchpad.SteppedTrancheConfig({
+            graduationQuoteTarget: 1 ether,
+            curveTokenAllocation: 750_000_000 ether,
+            lpTokenReserve: 200_000_000 ether,
+            numTranches: 3,
+            basePriceQ96: basePriceQ96,
+            stepPriceIncrementQ96: stepIncrementQ96,
+            maxWalletBps: 6000,
+            antiSnipeSurchargeBps: 1000,
+            antiSnipeBlocks: 10,
+            surchargeToKingPotBps: 5000
+        });
+
+        vm.prank(admin);
+        (, address trancheCurveAddr, PoolKey memory tranchePoolKey) = factory.launchSteppedTranche(
+            trancheMeta,
+            CurrencyLibrary.ADDRESS_ZERO,
+            60,
+            IHookRigOrchestrator(address(0)),
+            trancheStack,
+            trancheCfg,
+            bytes32(uint256(77))
+        );
+
+        SteppedTrancheLaunch trancheCurve = SteppedTrancheLaunch(payable(trancheCurveAddr));
+        vm.prank(trader1);
+        trancheCurve.buy{value: 0.6 ether}(0.6 ether, 1, trader1);
+        vm.roll(block.number + 1);
+        vm.prank(trader2);
+        trancheCurve.buy{value: 0.6 ether}(0.6 ether, 1, trader2);
+
+        assertEq(uint8(trancheCurve.launchState()), uint8(ITokenLaunchpad.LaunchState.Graduated));
+        (,, uint256 seededPot,) = orchestrator.getCurrentKing(tranchePoolKey.toId());
+        assertGt(seededPot, 0, "Round 1 KingOfThePool pot seeded from SteppedTranche surcharge");
+
+        // 2. NativeTickLaunch with tick-aligned Block-0 concentrated bands
+        ITokenLaunchpad.LaunchTokenMetadata memory nativeMeta = ITokenLaunchpad.LaunchTokenMetadata({
+            name: "Hoodi Native Tick Token",
+            symbol: "HTCK",
+            totalSupply: 1_000_000_000 ether,
+            creator: admin,
+            creatorVestingBps: 0,
+            vestingDurationSeconds: 0
+        });
+
+        ITokenLaunchpad.NativeTickBand[] memory bands = new ITokenLaunchpad.NativeTickBand[](2);
+        bands[0] = ITokenLaunchpad.NativeTickBand({tickLower: -1200, tickUpper: -600, tokenAmount: 500_000_000 ether});
+        bands[1] = ITokenLaunchpad.NativeTickBand({tickLower: -600, tickUpper: 0, tokenAmount: 500_000_000 ether});
+
+        ITokenLaunchpad.NativeTickConfig memory nativeCfg =
+            ITokenLaunchpad.NativeTickConfig({initialSqrtPriceX96: SQRT_PRICE_1_1, tickSpacing: 60, bands: bands});
+
+        IHookRigBlock.PoolStackConfig memory nativeStack =
+            _buildDefaultConfigForBitmap(HookPermissionMasks.PRESET_TRADER_FIRST);
+
+        vm.prank(admin);
+        (address nativeTokenAddr,, PoolKey memory nativePoolKey) = factory.launchNativeTick(
+            nativeMeta,
+            CurrencyLibrary.ADDRESS_ZERO,
+            IHookRigOrchestrator(address(0)),
+            nativeStack,
+            nativeCfg,
+            bytes32(uint256(88))
+        );
+
+        vm.prank(trader1);
+        router.swap{value: 0.1 ether}(
+            nativePoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -0.1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1}),
+            ""
+        );
+        assertGt(IERC20(nativeTokenAddr).balanceOf(trader1), 0);
     }
 }

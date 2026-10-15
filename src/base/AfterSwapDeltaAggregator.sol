@@ -5,7 +5,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {HookPermissionMasks} from "../libraries/HookPermissionMasks.sol";
@@ -42,10 +41,12 @@ abstract contract AfterSwapDeltaAggregator is
 {
     uint16 internal constant MAX_AGGREGATE_AFTER_SWAP_BPS = 2500; // 25.00% hard aggregate cap
 
+    error ExactOutputBuyNotSupported();
+
     function _executeAfterSwapDeltaWaterfall(
         mapping(PoolId => mapping(Currency => mapping(address => uint256))) storage poolClaims,
         IPoolManager manager,
-        PoolKey calldata key,
+        PoolKey calldata,
         PoolId poolId,
         uint32 bitmap,
         PoolTokenDir.SwapContext memory ctx
@@ -55,7 +56,16 @@ abstract contract AfterSwapDeltaAggregator is
             return (0, 0);
         }
 
-        bool hasActiveLiquidity = StateLibrary.getLiquidity(manager, poolId) > 0;
+        // AutoBurn and King take their cut in the project token on the unspecified leg; an exact-output buy puts
+        // the quote token there instead, which would let buyers skip both cuts.
+        if (
+            ctx.isBuy && !ctx.isExactInput
+                && (bitmap & (HookPermissionMasks.BIT_AUTO_BURN | HookPermissionMasks.BIT_KING_OF_THE_POOL)) != 0
+        ) {
+            revert ExactOutputBuyNotSupported();
+        }
+
+        // LP donation cuts are always taken and queued; `flushPendingDonations` pays them out on a later swap.
         uint256 lpDonationAmount = 0;
 
         // 0. Static 5 bps (0.05%) Protocol Royalty
@@ -71,7 +81,7 @@ abstract contract AfterSwapDeltaAggregator is
         );
 
         // 1. Arb recapture
-        if ((bitmap & HookPermissionMasks.BIT_ARB_RECAPTURE) != 0 && hasActiveLiquidity) {
+        if ((bitmap & HookPermissionMasks.BIT_ARB_RECAPTURE) != 0) {
             (totalCutAmount, lpDonationAmount) = ArbRecaptureLogic.processWaterfallArb(
                 _arbStates,
                 poolId,
@@ -131,7 +141,7 @@ abstract contract AfterSwapDeltaAggregator is
         }
 
         // 5. LP rewards
-        if ((bitmap & HookPermissionMasks.BIT_LP_REWARDS) != 0 && ctx.isBuy && hasActiveLiquidity) {
+        if ((bitmap & HookPermissionMasks.BIT_LP_REWARDS) != 0 && ctx.isBuy) {
             (totalCutAmount, lpDonationAmount) = FeeSharingLogic.processWaterfallLPRewards(
                 _lpRewardsConfigs,
                 poolId,
@@ -178,9 +188,7 @@ abstract contract AfterSwapDeltaAggregator is
 
         // 8. Auto Buyback & Floor Defense
         if ((bitmap & HookPermissionMasks.BIT_AUTO_BUYBACK) != 0) {
-            bool isToken0Proj = ctx.projectCurrency == key.currency0;
-            uint256 addedLp;
-            (totalCutAmount, addedLp) = AutoBuybackLogic.processWaterfallBuyback(
+            totalCutAmount = AutoBuybackLogic.processWaterfallBuyback(
                 _autoBuybackStates,
                 manager,
                 poolId,
@@ -188,23 +196,16 @@ abstract contract AfterSwapDeltaAggregator is
                 ctx.grossUnspecifiedAmount,
                 ctx.postSwapTick,
                 ctx.isExactInput,
-                isToken0Proj,
-                hasActiveLiquidity,
+                ctx.projectCurrency,
+                ctx.quoteCurrency,
                 totalCutAmount
             );
-            lpDonationAmount += addedLp;
         }
 
-        // Settle combined LP donations
+        // Queue combined LP donations (paid out by a later swap)
         if (lpDonationAmount > 0) {
-            totalCutAmount = AutoBuybackLogic.settleLPDonation(
-                totalLPRewardsDonated,
-                manager,
-                key,
-                hasActiveLiquidity,
-                ctx.unspecifiedCurrency,
-                totalCutAmount,
-                lpDonationAmount
+            AutoBuybackLogic.queueLPDonation(
+                _autoBuybackStates, manager, poolId, ctx.unspecifiedCurrency, lpDonationAmount
             );
         }
 

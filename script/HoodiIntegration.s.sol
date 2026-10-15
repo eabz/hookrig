@@ -150,19 +150,16 @@ contract HoodiIntegrationScript is Script {
         orchestrator.setTrustedRouter(address(swapRouter), true);
     }
 
-    function _buildStackConfig() internal pure returns (IHookRigBlock.PoolStackConfig memory stackCfg) {
+    function _buildStackConfig(address deployer) internal pure returns (IHookRigBlock.PoolStackConfig memory stackCfg) {
         stackCfg.presetId = IHookRigBlock.PresetId.Blank;
-        stackCfg.enabledBlocksBitmap = HookPermissionMasks.PRESET_FAIR_LAUNCH | HookPermissionMasks.BIT_KING_OF_THE_POOL
-            | HookPermissionMasks.BIT_SWAP_REWARDS;
+        stackCfg.poolAdmin = deployer;
+        stackCfg.enabledBlocksBitmap = HookPermissionMasks.PRESET_FAIR_LAUNCH | HookPermissionMasks.BIT_SWAP_REWARDS;
         stackCfg.dynamicFee =
             IHookRigBlock.DynamicFeeParams({baseFee: 3000, maxFee: 10_000, volatilityTickThreshold: 50});
         stackCfg.antiSnipe = IHookRigBlock.AntiSnipeParams({launchFee: 50_000, normalFee: 3000, decayBlocks: 20});
         stackCfg.walletCap = IHookRigBlock.WalletCapParams({maxWalletBps: 5000, sunsetBlocks: 500});
         stackCfg.autoBurn = IHookRigBlock.AutoBurnParams({burnOnBuyBps: 100, useTokenBurnCall: false});
         stackCfg.lpRewards = IHookRigBlock.LPRewardsParams({extraBuyFeeBps: 100});
-        stackCfg.kingOfThePool = IHookRigBlock.KingOfThePoolParams({
-            potFeeOnBuyBps: 100, roundDurationSeconds: 3600, minBuyAmountForReset: 0.01 ether
-        });
         stackCfg.swapRewards = IHookRigBlock.SwapRewardsParams({pointsPerUnitVolume: 10});
     }
 
@@ -206,7 +203,7 @@ contract HoodiIntegrationScript is Script {
             CurrencyLibrary.ADDRESS_ZERO,
             60,
             IHookRigOrchestrator(address(0)),
-            _buildStackConfig(),
+            _buildStackConfig(deployer),
             curveCfg,
             bytes32(uint256(1))
         );

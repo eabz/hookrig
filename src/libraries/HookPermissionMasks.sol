@@ -52,6 +52,12 @@ library HookPermissionMasks {
     uint32 internal constant AFTER_SWAP_RETURN_DELTA_BLOCKS_MASK = BIT_ARB_RECAPTURE | BIT_BUY_SELL_TAX | BIT_AUTO_BURN
         | BIT_FEE_SHARING | BIT_LP_REWARDS | BIT_KING_OF_THE_POOL | BIT_REFERRAL_SPLIT | BIT_AUTO_BUYBACK;
 
+    /// @notice Blocks that queue LP donations; they need `beforeSwap` (flush) and `beforeAddLiquidity` (add-block guard).
+    uint32 internal constant LP_DONATION_BLOCKS_MASK = BIT_ARB_RECAPTURE | BIT_LP_REWARDS | BIT_AUTO_BUYBACK;
+
+    /// @notice Per-wallet cap blocks; they need `beforeAddLiquidity` to reject one-sided range orders.
+    uint32 internal constant WALLET_RULE_BLOCKS_MASK = BIT_WALLET_CAP | BIT_VESTING_SELL_CAP;
+
     uint32 internal constant ALL_BLOCKS_MASK = (uint32(1) << 22) - 1;
 
     // -------------------------------------------------------------------------
@@ -176,7 +182,14 @@ library HookPermissionMasks {
         perms.beforeInitialize = (bitmap & BIT_TWAMM) != 0;
         perms.afterInitialize = bitmap != 0;
         perms.beforeAddLiquidity =
-            (bitmap & (BIT_TWAMM | BIT_ACCESS_CONTROL | BIT_ORACLE | BIT_MEV_PROTECTION | BIT_JIT_GUARD)) != 0;
+            (bitmap
+                        & (BIT_TWAMM
+                            | BIT_ACCESS_CONTROL
+                            | BIT_ORACLE
+                            | BIT_MEV_PROTECTION
+                            | BIT_JIT_GUARD
+                            | LP_DONATION_BLOCKS_MASK
+                            | WALLET_RULE_BLOCKS_MASK)) != 0;
         perms.beforeRemoveLiquidity = (bitmap & (BIT_ORACLE | BIT_MEV_PROTECTION | BIT_JIT_GUARD)) != 0;
         perms.beforeSwap =
             (bitmap
@@ -184,7 +197,7 @@ library HookPermissionMasks {
                             | BIT_MARKET_HOURS_FEE
                             | BIT_ANTI_SNIPE
                             | BIT_MEV_PROTECTION
-                            | BIT_ARB_RECAPTURE
+                            | LP_DONATION_BLOCKS_MASK
                             | BIT_ACCESS_CONTROL
                             | BIT_TWAMM
                             | BIT_ORACLE

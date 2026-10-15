@@ -53,6 +53,7 @@ library TWAMMLogic {
     error TWAMMOrderNotActive(uint256 orderId);
     error TWAMMPoolKeyMismatch();
     error MaxActiveTWAMMOrdersReached(PoolId poolId);
+    error TWAMMOrdersDisabled();
 
     function submitOrder(
         mapping(PoolId => TWAMMState) storage states,
@@ -264,23 +265,10 @@ abstract contract TWAMMBlock is IHookRigBlock {
         _twammStates[poolId].lastVirtualOrderTimestamp = uint64(block.timestamp);
     }
 
-    function submitTWAMMOrder(PoolKey calldata key, bool zeroForOne, uint128 totalAmount, uint64 durationSeconds)
-        external
-        payable
-        returns (uint256 orderId)
-    {
-        orderId = nextTWAMMOrderId++;
-        TWAMMLogic.submitOrder(
-            _twammStates,
-            _twammOrders,
-            _poolTWAMMOrderIds,
-            orderId,
-            key.toId(),
-            key,
-            zeroForOne,
-            totalAmount,
-            durationSeconds
-        );
+    /// @notice Disabled: TWAMM only tracks virtual volume and never swaps deposits, so an order could never pay
+    ///         out. Existing orders stay cancellable for a full refund through `cancelTWAMMOrder`.
+    function submitTWAMMOrder(PoolKey calldata, bool, uint128, uint64) external payable returns (uint256) {
+        revert TWAMMLogic.TWAMMOrdersDisabled();
     }
 
     function cancelTWAMMOrder(PoolKey calldata key, uint256 orderId) external returns (uint256 refundAmount) {

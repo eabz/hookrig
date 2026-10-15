@@ -55,6 +55,7 @@ library KingOfThePoolLogic {
     error InvalidKingRoundDuration(uint32 durationSeconds);
     error RoundNotClaimable(PoolId poolId, uint64 roundId);
     error NotRoundWinner(address caller, address winner);
+    error KingPotSeedNotAccepted(PoolId poolId);
 
     function initKing(
         mapping(PoolId => KingRoundState) storage states,
@@ -62,7 +63,11 @@ library KingOfThePoolLogic {
         IHookRigBlock.KingOfThePoolParams calldata params,
         uint32 overrideDuration
     ) public {
-        if (params.potFeeOnBuyBps > MAX_KING_POT_BPS || params.minBuyAmountForReset > MAX_MIN_BUY_AMOUNT_FOR_RESET) {
+        // A zero pot fee disables crowning, so a seeded pot could never be won: require a fee when enabled.
+        if (
+            params.potFeeOnBuyBps == 0 || params.potFeeOnBuyBps > MAX_KING_POT_BPS
+                || params.minBuyAmountForReset > MAX_MIN_BUY_AMOUNT_FOR_RESET
+        ) {
             revert KingPotBpsExceedsCap(params.potFeeOnBuyBps);
         }
         if (
@@ -143,7 +148,12 @@ library KingOfThePoolLogic {
 
         if (
             buyer != address(0) && grossBuyOutput >= state.minBuyAmountForReset
-                && (potContribution > 0 || (state.currentPotAmount > 0 && state.currentKing == address(0)))
+                // A non-dust buy takes the crown whenever there is a pot to win, even when it added no pot cut
+                // (a seed held in another currency, or the 25% cut cap already filled by earlier blocks). A buy
+                // whose nominal pot fee rounds to zero is dust and never takes the crown.
+                && (potContribution > 0
+                    || (state.currentPotAmount > 0
+                        && Math.mulDiv(grossBuyOutput, state.potFeeOnBuyBps, 10_000, Math.Rounding.Floor) > 0))
         ) {
             state.currentKing = buyer;
             state.roundDeadline = uint64(block.timestamp + state.roundDurationSeconds);
@@ -238,12 +248,10 @@ library KingOfThePoolLogic {
     function seedPotFromLaunchCurve(
         mapping(PoolId => KingRoundState) storage states,
         mapping(PoolId => HookRigBase.PoolRuntimeMeta) storage poolMeta,
-        mapping(PoolId => mapping(Currency => mapping(address => uint256))) storage poolClaims,
         PoolId poolId,
         Currency currency,
         uint256 amount,
-        address launchpadFactory,
-        address ownerAddress
+        address launchpadFactory
     ) external {
         HookRigBase.PoolRuntimeMeta storage meta = poolMeta[poolId];
         if (msg.sender != meta.authorizedCurve && msg.sender != launchpadFactory) {
@@ -251,16 +259,16 @@ library KingOfThePoolLogic {
         }
         if (amount == 0) return;
         KingRoundState storage st = states[poolId];
+        // Only a live King pot may receive the seed; curves route the surcharge to LP otherwise, so no pool admin
+        // can ever be credited with buyer surcharges.
         if (
-            (meta.enabledBlocksBitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0
-                && (st.currentPotAmount == 0 || st.potCurrency == currency)
+            (meta.enabledBlocksBitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) == 0 || st.potFeeOnBuyBps == 0
+                || (st.currentPotAmount != 0 && !(st.potCurrency == currency))
         ) {
-            st.potCurrency = currency;
-            st.currentPotAmount += amount;
-        } else {
-            address admin = meta.poolAdmin != address(0) ? meta.poolAdmin : ownerAddress;
-            poolClaims[poolId][currency][admin] += amount;
+            revert KingPotSeedNotAccepted(poolId);
         }
+        st.potCurrency = currency;
+        st.currentPotAmount += amount;
     }
 }
 

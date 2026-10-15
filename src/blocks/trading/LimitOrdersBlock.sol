@@ -15,15 +15,19 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 import {IHookRigOrchestrator} from "../../interfaces/IHookRigOrchestrator.sol";
-import {TransientContext} from "../../libraries/TransientContext.sol";
+import {IMsgSender} from "../../interfaces/IMsgSender.sol";
 
-contract LimitOrderSwapExecutor is IUnlockCallback {
+/// @notice Executes claim swaps through the full hook pipeline and reports the order maker as `msgSender()`
+///         so the hook attributes fees, crowns and rewards to the maker rather than to the executor.
+contract LimitOrderSwapExecutor is IUnlockCallback, IMsgSender {
     using CurrencySettler for Currency;
 
     IPoolManager public immutable poolManager;
     address public immutable hook;
 
     error OnlyHookCaller(address caller);
+
+    bytes32 private constant RECIPIENT_SLOT = keccak256("hookrig.transient.limitOrderRecipient.v1");
 
     struct FillCallbackData {
         PoolKey key;
@@ -45,12 +49,27 @@ contract LimitOrderSwapExecutor is IUnlockCallback {
         returns (uint256 outputAmount)
     {
         if (msg.sender != hook) revert OnlyHookCaller(msg.sender);
+        bytes32 slot = RECIPIENT_SLOT;
+        assembly ("memory-safe") {
+            tstore(slot, recipient)
+        }
         bytes memory res = poolManager.unlock(
             abi.encode(
                 FillCallbackData({key: key, zeroForOne: zeroForOne, inputAmount: inputAmount, recipient: recipient})
             )
         );
         outputAmount = abi.decode(res, (uint256));
+        assembly ("memory-safe") {
+            tstore(slot, 0)
+        }
+    }
+
+    /// @notice The order maker for the claim swap in progress (zero outside a claim).
+    function msgSender() external view override returns (address sender) {
+        bytes32 slot = RECIPIENT_SLOT;
+        assembly ("memory-safe") {
+            sender := tload(slot)
+        }
     }
 
     function unlockCallback(bytes calldata rawData) external override returns (bytes memory) {
@@ -135,6 +154,7 @@ library LimitOrdersLogic {
     error InvalidTargetTick(int24 targetTick, int24 tickSpacing);
     error OrderPoolKeyMismatch();
     error InsufficientPoolEscrow(PoolId poolId, Currency currency, uint256 requested, uint256 available);
+    error ClaimOutputBelowMinimum(uint256 orderId, uint256 outAmount, uint256 minAmountOut);
 
     function placeOrder(
         mapping(uint256 => UserLimitOrder) storage orders,
@@ -207,11 +227,14 @@ library LimitOrdersLogic {
         if (order.claimedOrCancelled) revert OrderAlreadyHandled(orderId);
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(order.poolId)) revert OrderPoolKeyMismatch();
 
+        // A filled bucket only marks that its tick was crossed; the input stays escrowed until claim, so a maker
+        // can always take it back (no lock when a claim swap cannot execute).
         LimitOrderBucket storage bucket = buckets[order.poolId][order.targetTick][order.zeroForOne];
-        if (bucket.filled) revert BucketAlreadyFilled(orderId);
-
         order.claimedOrCancelled = true;
         bucket.totalInputAmount -= order.inputAmount;
+        if (bucket.totalInputAmount == 0) {
+            bucket.filled = false;
+        }
 
         Currency inputCurrency = order.zeroForOne ? key.currency0 : key.currency1;
         uint256 escrowed = poolEscrow[order.poolId][inputCurrency];
@@ -238,6 +261,7 @@ library LimitOrdersLogic {
         mapping(PoolId => int24) storage lastTicks,
         PoolKey calldata key,
         uint256 orderId,
+        uint256 minAmountOut,
         bool swapOnClaim,
         LimitOrderSwapExecutor executor
     ) external {
@@ -268,7 +292,7 @@ library LimitOrdersLogic {
 
         uint128 paidOut = order.inputAmount;
         if (swapOnClaim && address(executor) != address(0)) {
-            paidOut = _executeClaimSwap(lastTicks, buckets, key, order, inputCurrency, orderId, executor);
+            paidOut = _executeClaimSwap(lastTicks, buckets, key, order, inputCurrency, orderId, minAmountOut, executor);
         } else {
             inputCurrency.transfer(msg.sender, order.inputAmount);
         }
@@ -283,13 +307,14 @@ library LimitOrdersLogic {
         UserLimitOrder storage order,
         Currency inputCurrency,
         uint256 orderId,
+        uint256 minAmountOut,
         LimitOrderSwapExecutor executor
     ) private returns (uint128 paidOut) {
         PoolId poolId = order.poolId;
         uint128 inAmt = order.inputAmount;
         bool zeroForOne = order.zeroForOne;
 
-        TransientContext.setInternalHookExecution(poolId, true);
+        // The claim swap runs through the full hook pipeline (fees, cuts, protections) like any other swap.
         uint256 outAmount;
         if (inputCurrency.isAddressZero()) {
             outAmount = executor.executeFillSwap{value: inAmt}(key, zeroForOne, inAmt, msg.sender);
@@ -297,8 +322,8 @@ library LimitOrdersLogic {
             IERC20(Currency.unwrap(inputCurrency)).safeTransfer(address(executor), inAmt);
             outAmount = executor.executeFillSwap(key, zeroForOne, inAmt, msg.sender);
         }
-        TransientContext.setInternalHookExecution(poolId, false);
         if (outAmount == 0) revert BucketNotYetFilled(orderId);
+        if (outAmount < minAmountOut) revert ClaimOutputBelowMinimum(orderId, outAmount, minAmountOut);
         paidOut = outAmount > type(uint128).max ? type(uint128).max : uint128(outAmount);
 
         (, int24 postTick,,) = StateLibrary.getSlot0(executor.poolManager(), poolId);
@@ -395,13 +420,23 @@ abstract contract LimitOrdersBlock is IHookRigBlock {
         );
     }
 
-    /// @notice Guarantee liveness: makers can always cancel unfilled orders and recover escrowed tokens.
+    /// @notice Guarantee liveness: makers can always cancel unclaimed orders and recover escrowed tokens.
     function cancelLimitOrder(PoolKey calldata key, uint256 orderId) external {
         LimitOrdersLogic.cancelOrder(_limitOrders, _limitOrderBuckets, limitOrderPoolEscrow, key, orderId);
     }
 
+    /// @notice Claims a filled order with no output floor. Prefer the overload with `minAmountOut`.
+    function claimLimitOrder(PoolKey calldata key, uint256 orderId) external virtual {
+        _claimLimitOrder(key, orderId, 0);
+    }
+
     /// @notice Guarantee liveness: makers can always claim/withdraw orders once their target tick has been crossed.
-    function claimLimitOrder(PoolKey calldata key, uint256 orderId) external {
+    /// @param minAmountOut Reverts when the claim swap pays the maker less than this amount (sandwich protection).
+    function claimLimitOrder(PoolKey calldata key, uint256 orderId, uint256 minAmountOut) external virtual {
+        _claimLimitOrder(key, orderId, minAmountOut);
+    }
+
+    function _claimLimitOrder(PoolKey calldata key, uint256 orderId, uint256 minAmountOut) internal {
         bool swapOnClaim = _swapFilledOrderOnClaim();
         LimitOrderSwapExecutor executor = _limitOrderExecutor;
         if (swapOnClaim && address(executor) == address(0)) {
@@ -415,6 +450,7 @@ abstract contract LimitOrdersBlock is IHookRigBlock {
             _limitOrderLastTick,
             key,
             orderId,
+            minAmountOut,
             swapOnClaim,
             executor
         );

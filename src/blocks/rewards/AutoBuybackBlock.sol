@@ -6,11 +6,11 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 import {HookPermissionMasks} from "../../libraries/HookPermissionMasks.sol";
 import {PoolTokenDir} from "../../libraries/PoolTokenDir.sol";
-import {TransientContext} from "../../libraries/TransientContext.sol";
 import {KingOfThePoolLogic} from "./KingOfThePoolBlock.sol";
 
 library AutoBuybackLogic {
@@ -24,6 +24,9 @@ library AutoBuybackLogic {
         uint128 minBuybackReserve;
         uint256 totalFloorDefendedAmount;
         mapping(Currency currency => uint256 reserve) reserveByCurrency;
+        /// @dev LP donations (ArbRecapture, LPRewards, deployed buyback reserves) held as hook ERC-6909 claims
+        ///      until a later swap flushes them, so the swap that pays a cut cannot target its own donation.
+        mapping(Currency currency => uint256 amount) pendingDonation;
     }
 
     event BuybackReserveAccumulated(PoolId indexed poolId, Currency indexed currency, uint256 added, uint256 reserve);
@@ -56,33 +59,38 @@ library AutoBuybackLogic {
         st.totalFloorDefendedAmount = 0;
     }
 
+    /// @notice Adds `cutAmount` to the reserve of `cutCurrency`. `minBuybackReserve` is denominated in the quote
+    ///         currency; once the quote reserve reaches it while the price is below the floor, both currency
+    ///         reserves move into the pending LP donation (so no reserve waits on a threshold in the wrong unit).
     function accumulateAndCheckTrigger(
         mapping(PoolId => AutoBuybackState) storage states,
         PoolId poolId,
         Currency cutCurrency,
         uint256 cutAmount,
         int24 postSwapTick,
-        bool isToken0ProjectToken,
-        bool hasActiveLiquidity
-    ) public returns (uint256 deployedToFloor) {
+        Currency projectCurrency,
+        Currency quoteCurrency
+    ) public {
         AutoBuybackState storage st = states[poolId];
-        uint256 newReserve = st.reserveByCurrency[cutCurrency] + cutAmount;
         if (cutAmount > 0) {
+            uint256 newReserve = st.reserveByCurrency[cutCurrency] + cutAmount;
             st.reserveByCurrency[cutCurrency] = newReserve;
             emit BuybackReserveAccumulated(poolId, cutCurrency, cutAmount, newReserve);
         }
 
+        bool isToken0ProjectToken = Currency.unwrap(projectCurrency) < Currency.unwrap(quoteCurrency);
         bool isBelowFloor =
             isToken0ProjectToken ? (postSwapTick >= st.triggerFloorTick) : (postSwapTick <= st.triggerFloorTick);
+        uint256 quoteReserve = st.reserveByCurrency[quoteCurrency];
 
-        if (
-            hasActiveLiquidity && !TransientContext.wasLiquidityAddedInTx(poolId) && st.minBuybackReserve > 0
-                && newReserve >= st.minBuybackReserve && isBelowFloor
-        ) {
-            deployedToFloor = newReserve;
-            st.reserveByCurrency[cutCurrency] = 0;
-            st.totalFloorDefendedAmount += deployedToFloor;
-            emit FloorBuybackTriggered(poolId, cutCurrency, postSwapTick, deployedToFloor);
+        if (st.minBuybackReserve > 0 && quoteReserve >= st.minBuybackReserve && isBelowFloor) {
+            uint256 projectReserve = st.reserveByCurrency[projectCurrency];
+            st.reserveByCurrency[quoteCurrency] = 0;
+            st.reserveByCurrency[projectCurrency] = 0;
+            st.pendingDonation[quoteCurrency] += quoteReserve;
+            st.pendingDonation[projectCurrency] += projectReserve;
+            st.totalFloorDefendedAmount += quoteReserve;
+            emit FloorBuybackTriggered(poolId, quoteCurrency, postSwapTick, quoteReserve);
         }
     }
 
@@ -94,55 +102,60 @@ library AutoBuybackLogic {
         uint256 grossAmount,
         int24 postSwapTick,
         bool isExactInput,
-        bool isToken0ProjectToken,
-        bool hasActiveLiquidity,
+        Currency projectCurrency,
+        Currency quoteCurrency,
         uint256 totalCutAmount
-    ) external returns (uint256 newTotalCut, uint256 addedLpDonation) {
+    ) external returns (uint256 newTotalCut) {
         uint256 bbCut;
         {
             uint16 bbBps = autoBuybackStates[poolId].buybackFeeBps;
-            if (bbBps == 0) return (totalCutAmount, 0);
+            if (bbBps == 0) return totalCutAmount;
             bbCut = _boundedCut(grossAmount, isExactInput, bbBps, totalCutAmount);
         }
         newTotalCut = totalCutAmount + bbCut;
-        addedLpDonation = accumulateAndCheckTrigger(
-            autoBuybackStates,
-            poolId,
-            unspecifiedCurrency,
-            bbCut,
-            postSwapTick,
-            isToken0ProjectToken,
-            hasActiveLiquidity
-        );
-        if (addedLpDonation > 0) {
-            if (addedLpDonation > bbCut) {
-                manager.burn(address(this), unspecifiedCurrency.toId(), addedLpDonation - bbCut);
-            }
-        } else if (bbCut > 0) {
+        if (bbCut > 0) {
             manager.mint(address(this), unspecifiedCurrency.toId(), bbCut);
         }
+        accumulateAndCheckTrigger(
+            autoBuybackStates, poolId, unspecifiedCurrency, bbCut, postSwapTick, projectCurrency, quoteCurrency
+        );
     }
 
-    function settleLPDonation(
-        mapping(PoolId => uint256) storage totalLPRewardsDonated,
+    /// @notice Holds an LP donation cut as hook ERC-6909 claims until `flushPendingDonations` pays it out.
+    function queueLPDonation(
+        mapping(PoolId => AutoBuybackState) storage states,
         IPoolManager manager,
-        PoolKey calldata key,
-        bool hasActiveLiquidity,
-        Currency unspecifiedCurrency,
-        uint256 totalCutAmount,
-        uint256 lpDonationAmount
-    ) external returns (uint256 finalTotalCut) {
-        finalTotalCut = totalCutAmount;
-        if (hasActiveLiquidity) {
-            PoolId poolId = key.toId();
-            uint256 amount0 = unspecifiedCurrency == key.currency0 ? lpDonationAmount : 0;
-            uint256 amount1 = unspecifiedCurrency == key.currency1 ? lpDonationAmount : 0;
-            manager.donate(key, amount0, amount1, "");
-            totalLPRewardsDonated[poolId] += lpDonationAmount;
-            emit LPRewardsDonated(poolId, amount0, amount1);
-        } else {
-            finalTotalCut -= lpDonationAmount;
-        }
+        PoolId poolId,
+        Currency currency,
+        uint256 amount
+    ) external {
+        manager.mint(address(this), currency.toId(), amount);
+        states[poolId].pendingDonation[currency] += amount;
+    }
+
+    /// @notice Donates queued LP donations to in-range liquidity before a swap moves the price. Skipped while
+    ///         liquidity was added in the current block, so just-in-time positions cannot collect them.
+    function flushPendingDonations(
+        mapping(PoolId => AutoBuybackState) storage states,
+        mapping(PoolId => uint256) storage totalLPRewardsDonated,
+        mapping(PoolId => uint256) storage lastLiquidityAddBlock,
+        IPoolManager manager,
+        PoolKey calldata key
+    ) external {
+        PoolId poolId = key.toId();
+        if (lastLiquidityAddBlock[poolId] >= block.number) return;
+        AutoBuybackState storage st = states[poolId];
+        uint256 amount0 = st.pendingDonation[key.currency0];
+        uint256 amount1 = st.pendingDonation[key.currency1];
+        if ((amount0 == 0 && amount1 == 0) || StateLibrary.getLiquidity(manager, poolId) == 0) return;
+
+        st.pendingDonation[key.currency0] = 0;
+        st.pendingDonation[key.currency1] = 0;
+        manager.donate(key, amount0, amount1, "");
+        if (amount0 > 0) manager.burn(address(this), key.currency0.toId(), amount0);
+        if (amount1 > 0) manager.burn(address(this), key.currency1.toId(), amount1);
+        totalLPRewardsDonated[poolId] += amount0 + amount1;
+        emit LPRewardsDonated(poolId, amount0, amount1);
     }
 
     function _boundedCut(uint256 grossAmount, bool isExactInput, uint16 bps, uint256 currentTotal)
@@ -167,21 +180,15 @@ library AutoBuybackLogic {
 ///      to defend pool liquidity when spot tick drops below `triggerFloorTick` and active liquidity > 0).
 abstract contract AutoBuybackBlock is IHookRigBlock {
     mapping(PoolId poolId => AutoBuybackLogic.AutoBuybackState state) internal _autoBuybackStates;
+    /// @dev Last block in which liquidity was added; pending LP donations wait until a later block.
+    mapping(PoolId poolId => uint256 blockNumber) internal _lastLiquidityAddBlock;
 
     function _initAutoBuyback(PoolId poolId, AutoBuybackParams calldata params) internal {
         AutoBuybackLogic.init(_autoBuybackStates, poolId, params);
     }
 
-    function _processAutoBuyback(
-        PoolId poolId,
-        Currency cutCurrency,
-        uint256 cutAmount,
-        int24 postSwapTick,
-        bool isToken0ProjectToken,
-        bool hasActiveLiquidity
-    ) internal returns (uint256 deployedToFloor) {
-        return AutoBuybackLogic.accumulateAndCheckTrigger(
-            _autoBuybackStates, poolId, cutCurrency, cutAmount, postSwapTick, isToken0ProjectToken, hasActiveLiquidity
-        );
+    /// @notice Pending LP donation for `currency` that the next eligible swap will donate.
+    function pendingLPDonation(PoolId poolId, Currency currency) external view returns (uint256) {
+        return _autoBuybackStates[poolId].pendingDonation[currency];
     }
 }

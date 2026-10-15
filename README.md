@@ -42,9 +42,13 @@ cd hookrig
 # 2. Build & check EIP-170 contract sizes
 forge build --sizes
 
-# 3. Run unit, preset, launchpad & invariant tests + coverage
+# 3. Run unit, preset, launchpad, invariant & fizz regression tests
 forge test -vv
 forge coverage --report summary --ir-minimum
+
+# 4. Run Medusa / Echidna stateful property-based fuzzing
+FOUNDRY_PROFILE=fuzz medusa fuzz
+FOUNDRY_PROFILE=fuzz echidna . --contract FuzzTester --config echidna.yaml
 ```
 
 ---
@@ -124,11 +128,12 @@ Launch tokens via [`LaunchpadFactory`](./src/launchpad/LaunchpadFactory.sol) wit
 | :--- | :--- |
 | [**01. Explanation & Catalog**](./docs/01-explanation-and-catalog.md) | Block specs, trust taxonomy (`Low` vs `Medium`), 12 presets, and launchpad overview. |
 | [**02. Architecture**](./docs/02-architecture.md) | Orchestrator vs. Preset deployment modes, `PoolTokenDir` normalization, and storage isolation. |
-| [**03. Hooks Execution Flow**](./docs/03-hooks-flow.md) | Callback sequence diagrams, `FeeAggregator`, and `AfterSwapDeltaAggregator` waterfall. |
-| [**04. Security Mechanics & Caveats**](./docs/04-security-mechanics-and-caveats.md) | Real-world v4 exploit defenses (Cork Protocol, Bunni V2), rounding laws, and hard caps. |
+| [**03. Hooks Execution Flow**](./docs/03-hooks-flow.md) | Callback sequence diagrams, `FeeAggregator`, and `AfterSwapDeltaAggregator` waterfall (including static `5 bps` protocol royalty). |
+| [**04. Security Mechanics & Caveats**](./docs/04-security-mechanics-and-caveats.md) | Real-world v4 exploit defenses (Cork Protocol, Bunni V2), rounding laws, hard caps, and Medusa verification standards. |
 | [**05. Token Launchpad Mechanics**](./docs/05-token-launch-mechanics.md) | Bonding math, `Create2` address sorting, and graduation security invariants. |
-| [**06. Attack Vectors & Code Fixes**](./docs/06-attack-vectors-and-fixes.md) | Complete catalog of all 14 attack vectors, 6 anti-freeze guarantees, and Tier 3 mutex rules (`2,843` valid combinations). |
-| [**07. Roadmap & Post-Review TODOs**](./docs/07-roadmap-and-todo.md) | Queued `src/` enhancements, Tier 3 mutual-exclusion enforcement spec, and Hoodi deployment checklist. |
+| [**06. Attack Vectors & Code Fixes**](./docs/06-attack-vectors-and-fixes.md) | Complete catalog of all 14 attack vectors, 6 anti-freeze guarantees, implemented Hoodi integration enhancements, and Tier 3 mutex rules (`2,843` valid combinations). |
+| [**07. Roadmap & Post-Review TODOs**](./docs/07-roadmap-and-todo.md) | Completed `src/` audit remediation & fuzzing ledger (`TODO-01`–`TODO-12`), plus live Hoodi broadcast checklist (`TODO-09`). |
+| [**PROPERTIES.md**](./PROPERTIES.md) | Canonical 56-property invariant specification (`26 Global GL-01..GL-26 + 30 Specific SP-01..SP-30`) verified via Medusa and Foundry. |
 
 ---
 
@@ -138,9 +143,16 @@ Launch tokens via [`LaunchpadFactory`](./src/launchpad/LaunchpadFactory.sol) wit
 src/
 ├── HookRigOrchestrator.sol     # Master composable Uniswap v4 hook orchestrator
 ├── base/                       # HookRigBase, FeeAggregator, AfterSwapDeltaAggregator
-├── blocks/                     # 17 core blocks (+ expansion blocks) across 5 groups
+├── blocks/                     # 17 core blocks + 5 expansion blocks across 5 groups
 ├── presets/                    # 12 concrete preset hook contracts
 ├── launchpad/                  # HookRigToken, LaunchpadFactory, and 3 curve contracts
 ├── interfaces/                 # Canonical interfaces & config structs
 └── libraries/                  # Bitmasks, PoolTokenDir, EIP-1153 TransientContext
+test/
+├── unit/                       # Isolated unit tests for all 22 blocks
+├── presets/                    # Preset & security vector tests
+├── launchpad/                  # Launchpad curve & graduation tests
+├── invariant/                  # Foundry stateful invariant suite
+├── integration/                # Hoodi fork & 2,843 Tier-3 combination verification
+└── fizz/                       # Medusa / Echidna stateful property fuzzing suite (56 properties)
 ```

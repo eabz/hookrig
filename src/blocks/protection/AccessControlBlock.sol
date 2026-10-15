@@ -5,6 +5,8 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
+import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 import {IHookRigOrchestrator} from "../../interfaces/IHookRigOrchestrator.sol";
@@ -26,27 +28,34 @@ library AccessControlLogic {
     event ClaimWithdrawn(PoolId indexed poolId, Currency indexed currency, address indexed beneficiary, uint256 amount);
 
     error AccountNotAllowlisted(PoolId poolId, address account);
+    error TokenNotDeployed();
+    error OneSidedLiquidityNotAllowed(PoolId poolId, int24 currentTick, int24 tickLower, int24 tickUpper);
     error UnauthorizedAccessControlManager(address caller);
 
     function checkValidTier3Bitmap(uint32 bitmap) external pure returns (bool) {
         return HookPermissionMasks.isValidTier3Bitmap(bitmap);
     }
 
+    /// @notice Rejects bitmaps whose blocks need a callback the hook address does not enable, so no block is
+    ///         registered on a preset hook that PoolManager would never call for it.
     function validateBitmapAndPermissions(uint32 bitmap, uint160 hookAddr) external pure {
         if (!HookPermissionMasks.isValidTier3Bitmap(bitmap)) {
             revert IHookRigOrchestrator.InvalidBlockBitmap(bitmap);
         }
-        // Only enforce preset-specific permission subset when deployed at a non-full-orchestrator address
-        uint160 fullFlags = uint160(0x3CA8);
-        if ((hookAddr & fullFlags) != fullFlags) {
-            if (
-                ((bitmap & HookPermissionMasks.BIT_TWAMM) != 0 && (hookAddr & (1 << 13)) == 0)
-                    || ((bitmap & HookPermissionMasks.AFTER_SWAP_RETURN_DELTA_BLOCKS_MASK) != 0
-                        && (hookAddr & (1 << 2)) == 0)
-            ) {
-                revert IHookRigOrchestrator.InvalidBlockBitmap(bitmap);
-            }
+        uint160 required = _permissionFlags(HookPermissionMasks.permissionsForBitmap(bitmap));
+        if ((hookAddr & required) != required) {
+            revert IHookRigOrchestrator.InvalidBlockBitmap(bitmap);
         }
+    }
+
+    function _permissionFlags(Hooks.Permissions memory p) private pure returns (uint160 flags) {
+        if (p.beforeInitialize) flags |= Hooks.BEFORE_INITIALIZE_FLAG;
+        if (p.afterInitialize) flags |= Hooks.AFTER_INITIALIZE_FLAG;
+        if (p.beforeAddLiquidity) flags |= Hooks.BEFORE_ADD_LIQUIDITY_FLAG;
+        if (p.beforeRemoveLiquidity) flags |= Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG;
+        if (p.beforeSwap) flags |= Hooks.BEFORE_SWAP_FLAG;
+        if (p.afterSwap) flags |= Hooks.AFTER_SWAP_FLAG;
+        if (p.afterSwapReturnDelta) flags |= Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
     }
 
     function resolveBitmap(IHookRigBlock.PresetId presetId, uint32 enabledBlocksBitmap)
@@ -85,6 +94,11 @@ library AccessControlLogic {
 
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, poolId);
         if (sqrtPriceX96 != 0) revert IHookRigOrchestrator.PoolAlreadyInitialized(poolId);
+        // Both tokens must already exist: otherwise anyone can pre-register the pool of a predicted launch token,
+        // take its admin role and make the launch revert.
+        if (_isUndeployedToken(currency0) || _isUndeployedToken(currency1)) {
+            revert TokenNotDeployed();
+        }
 
         bitmap = resolveBitmap(config.presetId, config.enabledBlocksBitmap);
         if ((bitmap & HookPermissionMasks.FEE_BLOCKS_MASK) != 0 && !keyFee.isDynamicFee()) {
@@ -103,6 +117,10 @@ library AccessControlLogic {
         meta.projectCurrency = config.isToken0ProjectToken ? currency0 : currency1;
 
         emit PoolStackConfigured(poolId, config.presetId, bitmap, admin);
+    }
+
+    function _isUndeployedToken(Currency currency) private view returns (bool) {
+        return !currency.isAddressZero() && Currency.unwrap(currency).code.length == 0;
     }
 
     function validateWithdrawClaim(
@@ -202,6 +220,19 @@ library AccessControlLogic {
         }
 
         revert AccountNotAllowlisted(poolId, user);
+    }
+
+    /// @notice Rejects liquidity adds whose range excludes the current tick on pools with per-wallet caps:
+    ///         a one-sided position is a range order that buys or sells without a swap, skipping the caps and cuts.
+    function enforceTwoSidedLiquidity(IPoolManager manager, PoolId poolId, ModifyLiquidityParams calldata params)
+        external
+        view
+    {
+        if (params.liquidityDelta <= 0) return;
+        (, int24 tick,,) = StateLibrary.getSlot0(manager, poolId);
+        if (tick < params.tickLower || tick >= params.tickUpper) {
+            revert OneSidedLiquidityNotAllowed(poolId, tick, params.tickLower, params.tickUpper);
+        }
     }
 
     function resolveUser(mapping(address => bool) storage isTrustedRouter, address routerSender, bytes calldata)

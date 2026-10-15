@@ -61,7 +61,7 @@ To serve both no-code token creators (who want instant gas-efficient deployment)
 
 ## 3. Repository & Directory Structure
 
-When we transition from documentation to Foundry implementation, the codebase will follow this exact layout:
+The repository is organized as follows:
 
 ```text
 hookrig/
@@ -69,39 +69,45 @@ hookrig/
 │   ├── 01-explanation-and-catalog.md
 │   ├── 02-architecture.md
 │   ├── 03-hooks-flow.md
-│   └── 04-security-mechanics-and-caveats.md
+│   ├── 04-security-mechanics-and-caveats.md
+│   ├── 05-token-launch-mechanics.md
+│   ├── 06-attack-vectors-and-fixes.md
+│   └── 07-roadmap-and-todo.md
 ├── src/
+│   ├── HookRigOrchestrator.sol            # Master composable Uniswap v4 hook orchestrator
 │   ├── interfaces/
-│   │   ├── IHookRigBlock.sol              # Standardized interface for composable blocks
+│   │   ├── IHookRigBlock.sol              # Standardized interface & structs for all 22 blocks
 │   │   ├── IHookRigOrchestrator.sol       # Pool configuration & block bitmap registry
 │   │   └── ITokenLaunchpad.sol            # Shared interface for the 3 launch curves
 │   ├── base/
-│   │   ├── HookRigBase.sol                # Extends OpenZeppelin BaseHook + PoolId isolation
+│   │   ├── HookRigBase.sol                # Extends OpenZeppelin BaseHook + PoolId isolation + Protocol Royalty
 │   │   ├── FeeAggregator.sol              # Deterministic resolution of beforeSwap fees
 │   │   └── AfterSwapDeltaAggregator.sol   # Single-pass output delta slicing & settlement
 │   ├── blocks/
 │   │   ├── fees/                          # Group 1: DynamicFee, ManagedFee, MarketHoursFee
-│   │   ├── protection/                    # Group 2: AntiSnipe, MEVProtection, ArbRecapture, AccessControl
-│   │   ├── token-rules/                   # Group 3: WalletCap, BuySellTax, AutoBurn
-│   │   ├── rewards/                       # Group 4: FeeSharing, LPRewards, SwapRewards, KingOfThePool
+│   │   ├── protection/                    # Group 2: AntiSnipe, MEVProtection, ArbRecapture, AccessControl, JITGuard, CircuitBreaker
+│   │   ├── token-rules/                   # Group 3: WalletCap, BuySellTax, AutoBurn, VestingSellCap
+│   │   ├── rewards/                       # Group 4: FeeSharing, LPRewards, SwapRewards, KingOfThePool, ReferralSplit, AutoBuyback
 │   │   └── trading/                       # Group 5: LimitOrders, TWAMM, Oracle
 │   ├── presets/                           # The 12 pre-composed Preset Hook contracts
 │   ├── launchpad/
 │   │   ├── LaunchpadFactory.sol           # Token + Curve + HookKey deployment coordinator
 │   │   ├── HookRigToken.sol               # Audited ERC-20 with burn & launchpad hooks
-│   │   ├── curves/
-│   │   │   ├── VirtualXYKLaunch.sol       # Curve 1: Pump-style virtual constant product
-│   │   │   ├── SteppedTrancheLaunch.sol   # Curve 2: Stepped anti-bot fair accumulation
-│   │   │   └── NativeTickLaunch.sol       # Curve 3: Direct v4 single-sided tick curve
+│   │   └── curves/
+│   │       ├── VirtualXYKLaunch.sol       # Curve 1: Pump-style virtual constant product
+│   │       ├── SteppedTrancheLaunch.sol   # Curve 2: Stepped anti-bot fair accumulation
+│   │       └── NativeTickLaunch.sol       # Curve 3: Direct v4 single-sided tick curve
 │   └── libraries/
 │       ├── PoolTokenDir.sol               # Identifies project token vs quote currency (buy vs sell)
 │       ├── TransientContext.sol           # EIP-1153 per-PoolId transient swap context
-│       └── HookPermissionMasks.sol        # 14-bit address flag constants for all 17 blocks & 12 presets
+│       └── HookPermissionMasks.sol        # 14-bit address flags & Tier-3 mutex validator (2,843 valid stacks)
 └── test/
-    ├── unit/                              # Isolated tests for each of the 17 blocks
-    ├── presets/                           # Integration tests for all 12 presets
+    ├── unit/                              # Isolated tests for all 22 blocks
+    ├── presets/                           # Integration & security vector tests for all 12 presets
     ├── launchpad/                         # Full lifecycle tests for the 3 launch curves + graduation
-    └── invariant/                         # Stateful fuzzing for delta conservation & rounding
+    ├── invariant/                         # Foundry stateful invariant fuzzing
+    ├── integration/                       # Hoodi fork & exhaustive 2,843 Tier-3 combination verification
+    └── fizz/                              # Medusa & Echidna property-based fuzzing harness (56 properties)
 ```
 
 ---

@@ -62,13 +62,13 @@ library WalletCapLogic {
 
         uint256 maxAllowed = Math.mulDiv(supply, maxBps, 10_000, Math.Rounding.Floor);
         uint256 actualBal = token.balanceOf(recipient);
-        uint256 cachedBal = TransientContext.getWalletCapExpectedBalance(poolId, recipient);
+        uint256 cachedBal = TransientContext.getWalletCapExpectedBalance(address(token), recipient);
         uint256 effectivePreBal = actualBal >= cachedBal ? actualBal : cachedBal;
         uint256 postBalance = effectivePreBal + netProjectTokensBought;
         if (postBalance > maxAllowed) {
             revert WalletCapExceeded(recipient, postBalance, maxAllowed);
         }
-        TransientContext.setWalletCapExpectedBalance(poolId, recipient, postBalance);
+        TransientContext.setWalletCapExpectedBalance(address(token), recipient, postBalance);
     }
 
     function enforceAfterSwap(
@@ -92,11 +92,12 @@ library WalletCapLogic {
             enforceAfterBuy(states, poolId, projectCurrency, trader, netTokensToBuyer);
         } else {
             uint256 sold = isExactInput ? settledSpecifiedAmount : (grossUnspecifiedAmount + totalCutAmount);
-            uint256 prevExpected = TransientContext.getWalletCapExpectedBalance(poolId, trader);
+            address token = Currency.unwrap(projectCurrency);
+            uint256 prevExpected = TransientContext.getWalletCapExpectedBalance(token, trader);
             if (prevExpected == 0 && !projectCurrency.isAddressZero()) {
                 prevExpected = IERC20(Currency.unwrap(projectCurrency)).balanceOf(trader);
             }
-            TransientContext.setWalletCapExpectedBalance(poolId, trader, prevExpected > sold ? prevExpected - sold : 0);
+            TransientContext.setWalletCapExpectedBalance(token, trader, prevExpected > sold ? prevExpected - sold : 0);
         }
     }
 }

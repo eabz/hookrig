@@ -17,7 +17,7 @@ Rather than writing custom token, proxy, or math primitives from scratch, the `h
 | **Bonding Curve Math** | `@openzeppelin/contracts/utils/math/Math.sol` (`mulDiv`) & `SafeCast.sol` | 512-bit intermediate precision `mulDiv` with explicit `Math.Rounding.Floor` (tokens out) and `Math.Rounding.Ceil` (quote in) to prevent Bunni-style rounding drains. |
 | **v4 Curve & Settlement** | `@openzeppelin/uniswap-hooks/base/BaseCustomCurve.sol`<br>`@openzeppelin/uniswap-hooks/utils/CurrencySettler.sol` | Audited delta settlement (`sync`, `take`, `settle`) handling both ERC-20 quote tokens (USDC) and Native ETH (`CurrencyLibrary.ADDRESS_ZERO`). |
 | **Reentrancy & Locks** | `@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol` | EIP-1153 transient reentrancy lock protecting curve `buy()`, `sell()`, and `graduate()` transitions. |
-| **Creator / Team Vesting** | `@openzeppelin/contracts/finance/VestingWallet.sol` | Audited linear/cliff vesting vault for optional creator/team allocations. |
+| **Creator / Team Vesting** | `@openzeppelin/contracts/finance/VestingWallet.sol` | Audited linear/cliff vesting vault for optional creator/team allocations (capped at `creatorVestingBps <= 2000` / $20\%$, starting after a mandatory `1 hour` post-launch cliff so vested tokens cannot be dumped into an active bonding curve). |
 | **Allowlist / Presale** | `@openzeppelin/contracts/utils/cryptography/MerkleProof.sol` | Audited Merkle verification when launching with the `Access control` block. |
 | **v4 Pool & LP Seeding** | `Uniswap/v4-core` (`PoolManager`) & `v4-periphery` (`PositionManager`, `TickMath`, `SqrtPriceMath`) | Official Uniswap v4 math and liquidity seeding primitives for atomic graduation. |
 
@@ -49,7 +49,7 @@ In Uniswap v4, every `PoolKey` requires `Currency.unwrap(currency0) < Currency.u
 ### Curve 1: `VirtualXYKLaunch` (Virtual Constant-Product Bonding Curve)
 
 #### 1. Supply Partitioning
-For a standard total supply $S_{\text{total}} = 1,000,000,000 \times 10^{18}$:
+For a standard total supply $S_{\text{total}} = 1,000,000,000 \times 10^{18}$ (validated in `LaunchpadFactory` such that `curveTokenAllocation + lpTokenReserve <= totalSupply - vestingAmount`, `GL-23`):
 - **Curve Sale Allocation ($S_{\text{curve}}$)**: $80\%$ ($800\text{M}$ tokens) available to buy on the bonding curve.
 - **Graduation LP Reserve ($S_{\text{lp}}$)**: $20\%$ ($200\text{M}$ tokens) held locked in the curve contract to pair with the raised quote currency upon graduation.
 
@@ -59,14 +59,14 @@ The curve initializes with virtual quote reserves $X_0$ (e.g., $1.5\text{ ETH}$)
 $$(X_0 + x_{\text{real}}) \cdot Y_{\text{virtual}} = k, \quad \text{where } k = X_0 \cdot Y_0$$
 
 - **Buying $\Delta y$ tokens with $\Delta x$ net quote input**:
-  $$\Delta y = \left\lfloor Y_{\text{virtual}} - \frac{k}{(X_0 + x_{\text{real}}) + \Delta x} \right\rfloor \quad (\text{rounded DOWN via } \texttt{Math.Rounding.Floor})$$
+  $$\Delta y = \left\lfloor Y_{\text{virtual}} - \left\lceil\frac{k}{(X_0 + x_{\text{real}}) + \Delta x}\right\rceil \right\rfloor \quad (\text{rounded DOWN via } \texttt{Math.Rounding.Floor})$$
 - **Selling $\Delta y$ tokens for $\Delta x$ quote output**:
-  $$\Delta x = \left\lfloor (X_0 + x_{\text{real}}) - \frac{k}{Y_{\text{virtual}} + \Delta y} \right\rfloor \quad (\text{rounded DOWN via } \texttt{Math.Rounding.Floor})$$
+  $$\Delta x = \left\lfloor (X_0 + x_{\text{real}}) - \left\lceil\frac{k}{Y_{\text{virtual}} + \Delta y}\right\rceil \right\rfloor \quad (\text{rounded DOWN via } \texttt{Math.Rounding.Floor})$$
 
 #### 3. Cap-and-Refund at Graduation Threshold
-When a buyer submits $\Delta x$ that would push $x_{\text{real}} + \Delta x > X_{\text{target}}$ (or sell more than the remaining $S_{\text{curve}}$ tokens):
-1. The curve consumes **only** $\Delta x_{\text{used}} = X_{\text{target}} - x_{\text{real}}$ to purchase the exact remaining curve tokens.
-2. The excess quote $\Delta x_{\text{excess}} = \Delta x - \Delta x_{\text{used}}$ is immediately refunded to the buyer (or optionally swapped into the newly graduated v4 pool in the same transaction).
+When a buyer submits $\Delta x$ that would push $x_{\text{real}} + \Delta x > X_{\text{target}}$ (or purchase more than the remaining $S_{\text{curve}}$ tokens, `SP-27`):
+1. The curve consumes **only** the exact quote required (`quoteUsed`) to reach `X_target` or clear the remaining curve allocation.
+2. Any unused quote $\Delta x_{\text{excess}} = \Delta x - \Delta x_{\text{used}}$ is immediately refunded to the buyer.
 3. `graduate()` executes atomically in the same transaction.
 
 ---
@@ -75,15 +75,16 @@ When a buyer submits $\Delta x$ that would push $x_{\text{real}} + \Delta x > X_
 
 Designed for launches where preventing block-0 sniper bundles from acquiring the majority of supply at the lowest price is paramount.
 
-#### 1. Tranche & Time-Damped Structure
-- $S_{\text{curve}}$ ($800\text{M}$ tokens) is partitioned into $M$ discrete price tranches (e.g., $M = 10$ tranches of $80\text{M}$ tokens each), where tranche $i$ has a fixed or linearly increasing marginal price $P_i$:
-  $$P_i = P_0 \cdot (1 + \alpha \cdot i)$$
+#### 1. Piecewise Tranche Schedule & Exact Multi-Tranche Integration
+- $S_{\text{curve}}$ ($800\text{M}$ tokens) is partitioned into $M$ discrete price tranches (e.g., $M = 10$ tranches of $80\text{M}$ tokens each), where tranche $i$ has a linearly increasing marginal price $P_i$:
+  $$P_i = P_0 + i \cdot \Delta P$$
+- **Piecewise Tranche Integration (`GL-15`, `SP-27`)**: If a single `buy()` crosses one or more tranche boundaries, `SteppedTrancheLaunch` steps through each tranche sequentially—charging the exact price $P_i$ for the tokens remaining in tranche $i$ before advancing to tranche $i+1$, and refunding any unused quote if the final tranche is cleared.
 - **Built-In Curve Protections**:
-  - **Per-Wallet Cap During Bonding**: Enforces `maxWalletBps` (e.g., $1.5\%$ of total supply per wallet) directly inside `buy()`.
-  - **Sniper Decay Surcharge**: During the first $N$ blocks after launch creation, buyers pay an `antiSnipeBps` surcharge on top of $P_i$.
+  - **Per-Wallet Cap During Bonding**: Enforces `maxWalletBps` (aligned with post-graduation `WalletCapParams.maxWalletBps`, `IT-02`) directly inside `buy()`.
+  - **Sniper Decay Surcharge**: During the first $N$ blocks after launch creation, buyers pay an `antiSnipeBps` surcharge (rounded UP via `Math.Rounding.Ceil`) on top of $P_i$.
   - **Value Accretion**: $100\%$ of sniper surcharges collected during the bonding phase are split between:
-    1. **Extra Graduation LP Depth** (increasing the backing floor price of the token in v4), or
-    2. **Seeding the Round #1 `King of the Pool` Jackpot Pot** when paired with *King of the Pool launch* or *Weekly King with buy rewards*!
+    1. **Extra Graduation LP Depth** (increasing the backing floor price of the token in v4), and
+    2. **Seeding Round #1 `King of the Pool` / Admin Claims** (`seedKingPotFromLaunchCurve`).
 
 ---
 
@@ -117,21 +118,18 @@ stateDiagram-v2
     [*] --> ActiveBonding: LaunchpadFactory.createLaunch()
     ActiveBonding --> ActiveBonding: buy() / sell()\n(x_real < X_target)
     ActiveBonding --> Graduating: buy() reaches X_target\n(or final tranche cleared)
-    Graduating --> GraduatedV4Pool: 1. Compute spot-continuous sqrtPriceX96\n2. PoolManager.initialize(PoolKey)\n3. HookRig.activateGraduatedPool(poolId)\n4. Seed (X_target, S_lp) full-range LP & burn claims
+    Graduating --> GraduatedV4Pool: 1. Compute spot-continuous sqrtPriceX96\n2. PoolManager.initialize(PoolKey)\n3. HookRig.notifyPoolGraduated(poolId)\n4. Seed full-range LP & burn excess tokens
     GraduatedV4Pool --> [*]
 ```
 
 ### The 4 Graduation Security Invariants
 
-1. **Spot-Price Continuity (Zero Graduation Arbitrage)**:
-   - Let $P_{\text{final}}$ be the marginal price of the final token sold on the bonding curve.
-   - The graduation reserve ratio $(X_{\text{lp}}, S_{\text{lp}})$ and the initial v4 pool price `sqrtPriceX96` are parameterized at launch creation such that:
-     $$\left(\frac{\texttt{sqrtPriceX96}}{2^{96}}\right)^2 = \frac{S_{\text{lp}}}{X_{\text{lp}}} = P_{\text{final}}$$
-   - This eliminates any instantaneous arbitrage jump between the final curve trade and the first Uniswap v4 swap.
-2. **Pre-Initialization Front-Running Lock**:
-   - In `HookRigBase.beforeInitialize`, if a `PoolKey` contains a token deployed by `LaunchpadFactory`, `beforeInitialize` verifies `sender == address(launchpadFactory) || sender == authorizedCurve[key.toId()]`.
-   - Nobody can front-run `PoolManager.initialize()` with a manipulated `sqrtPriceX96`.
-3. **Post-Graduation `Anti-snipe` Clock Reset**:
-   - When a token graduates from Curve 1 or Curve 2 into Uniswap v4, the `Anti-snipe` block's $N$-block decay timer starts at **`graduationBlock = block.number`**, protecting the newly seeded v4 pool during its first $N$ blocks of AMM trading.
-4. **Irreversible LP Burn**:
-   - The LP position minted during graduation is held as locked ERC-6909 liquidity claims (or burned to `0xdead`), ensuring the base liquidity floor can never be rugged by the token creator.
+1. **Spot-Price Continuity (`GL-11` — Zero Graduation Arbitrage)**:
+   - Let $P_{\text{final}}$ be the marginal price of the final token sold on the bonding curve (`virtualTokenReserve / virtualQuoteReserve` on `VirtualXYKLaunch`, or `2^96 / currentMarginalPriceQ96()` on `SteppedTrancheLaunch`).
+   - At graduation, the curve computes `graduationSqrtPriceX96` directly from $P_{\text{final}}$ and sizes the paired token amount `tokensToSeed` to match `quoteToSeed * P_final` (capped at `lpTokenReserve`), eliminating any instantaneous arbitrage jump between the final curve trade and the first Uniswap v4 swap.
+2. **Pre-Initialization Front-Running Lock (`GL-10`, `SP-19`)**:
+   - In `HookRigOrchestrator._beforeInitialize`, if a `PoolKey` has a `reservedLaunchCurve`, initialization reverts with `UnauthorizedPoolInitializer` unless `sender == reservedCurve || sender == launchpadFactory`. Furthermore, `registerPoolStack` reverts on any already-initialized pool (`sqrtPriceX96 != 0`).
+3. **Once-Only Post-Graduation `Anti-snipe` Clock Reset (`GL-18`)**:
+   - When a token graduates from Curve 1 or Curve 2 into Uniswap v4, `notifyPoolGraduated` (latched via `poolGraduatedNotified[poolId]` so it can only execute once) resets the `Anti-snipe` block's $N$-block decay timer to `graduationBlock = block.number`.
+4. **Irreversible LP Lock & Excess Token Burn (`GL-26`)**:
+   - The full-range LP position minted during graduation is locked permanently inside the graduated curve contract, and any leftover project tokens (`unseeded lpTokenReserve` or unsold allocation) are burned via `ERC20Burnable.burn()` (or sent to `0xdEaD`) so zero value is stranded in graduated curves.

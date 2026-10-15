@@ -185,6 +185,9 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
             Math.mulDiv(virtualTokenReserve, quoteToSeed, virtualQuoteReserve, Math.Rounding.Floor);
         uint256 availableTokens = IERC20(projectToken).balanceOf(address(this));
         if (continuousLpTokens > availableTokens) {
+            // Fewer tokens than the curve price needs: seed proportionally less quote so the pool still opens at
+            // the final curve price. The unused quote is donated to the locked LP in `unlockCallback`.
+            quoteToSeed = Math.mulDiv(quoteToSeed, availableTokens, continuousLpTokens, Math.Rounding.Floor);
             continuousLpTokens = availableTokens;
         }
         if (continuousLpTokens == 0) {

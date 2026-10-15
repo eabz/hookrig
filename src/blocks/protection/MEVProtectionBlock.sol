@@ -11,6 +11,7 @@ library MEVProtectionLogic {
         int24 blockStartTick;
         uint32 lastSwapBlock;
         bool lastSwapZeroForOne;
+        bool blockDirectionSet;
     }
 
     error SwapPriceImpactExceeded(int24 tickDelta, int24 maxAllowed);
@@ -32,7 +33,8 @@ library MEVProtectionLogic {
             maxTickDeltaPerSwap: params.maxTickDeltaPerSwap,
             blockStartTick: 0,
             lastSwapBlock: 0,
-            lastSwapZeroForOne: false
+            lastSwapZeroForOne: false,
+            blockDirectionSet: false
         });
         if (params.minLPHoldBlocks > 7200 || params.jitExitPenaltyBps > 5000) {
             revert JITGuardLogic.InvalidJITGuardConfig(params.minLPHoldBlocks, params.jitExitPenaltyBps);
@@ -59,6 +61,7 @@ library MEVProtectionLogic {
             if (isNewBlock) {
                 state.blockStartTick = preSwapTick;
                 state.lastSwapBlock = uint32(block.number);
+                state.blockDirectionSet = false;
             }
             int256 blockDelta = postSwapTick >= state.blockStartTick
                 ? int256(postSwapTick) - int256(state.blockStartTick)
@@ -70,12 +73,15 @@ library MEVProtectionLogic {
             }
             int256 dirThreshold = int256(maxDelta) / 20;
             if (dirThreshold < 2) dirThreshold = 2;
-            if (!isNewBlock && delta >= dirThreshold && state.lastSwapZeroForOne != zeroForOne) {
-                int24 clampedDelta = delta > int256(type(int24).max) ? type(int24).max : int24(delta);
-                revert SwapPriceImpactExceeded(clampedDelta, maxDelta);
-            }
-            if (isNewBlock || delta >= dirThreshold) {
+            // Only a swap that moves at least `dirThreshold` ticks sets the block direction, so a dust swap
+            // cannot pick the direction that later trades are checked against.
+            if (delta >= dirThreshold) {
+                if (state.blockDirectionSet && state.lastSwapZeroForOne != zeroForOne) {
+                    int24 clampedDelta = delta > int256(type(int24).max) ? type(int24).max : int24(delta);
+                    revert SwapPriceImpactExceeded(clampedDelta, maxDelta);
+                }
                 state.lastSwapZeroForOne = zeroForOne;
+                state.blockDirectionSet = true;
             }
         }
     }

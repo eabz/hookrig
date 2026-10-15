@@ -75,7 +75,7 @@ abstract contract HookRigBase is
     }
 
     /// @notice Resolves the true end-user initiator address safely (preventing untrusted router hookData spoofing).
-    function _resolveUser(address routerSender, bytes calldata hookData) internal view returns (address user) {
+    function _resolveUser(address routerSender, bytes calldata hookData) internal view virtual returns (address user) {
         return AccessControlLogic.resolveUser(isTrustedRouter, routerSender, hookData);
     }
 
