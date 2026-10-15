@@ -174,14 +174,7 @@ library HookPermissionMasks {
     /// @notice Computes the required Uniswap v4 Hooks.Permissions for any given block bitmap.
     function permissionsForBitmap(uint32 bitmap) internal pure returns (Hooks.Permissions memory perms) {
         perms.beforeInitialize = (bitmap & BIT_TWAMM) != 0;
-        perms.afterInitialize =
-            (bitmap
-                        & (BIT_DYNAMIC_FEE
-                            | BIT_MANAGED_FEE
-                            | BIT_ARB_RECAPTURE
-                            | BIT_LIMIT_ORDERS
-                            | BIT_TWAMM
-                            | BIT_ORACLE)) != 0;
+        perms.afterInitialize = bitmap != 0;
         perms.beforeAddLiquidity =
             (bitmap & (BIT_TWAMM | BIT_ACCESS_CONTROL | BIT_ORACLE | BIT_MEV_PROTECTION | BIT_JIT_GUARD)) != 0;
         perms.beforeRemoveLiquidity = (bitmap & (BIT_ORACLE | BIT_MEV_PROTECTION | BIT_JIT_GUARD)) != 0;

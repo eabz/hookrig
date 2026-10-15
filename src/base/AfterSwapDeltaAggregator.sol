@@ -100,7 +100,10 @@ abstract contract AfterSwapDeltaAggregator is
         }
 
         // 3. Auto burn
-        if ((bitmap & HookPermissionMasks.BIT_AUTO_BURN) != 0 && ctx.isBuy) {
+        if (
+            (bitmap & HookPermissionMasks.BIT_AUTO_BURN) != 0 && ctx.isBuy
+                && ctx.unspecifiedCurrency == ctx.projectCurrency
+        ) {
             totalCutAmount = AutoBurnLogic.processWaterfallBurn(
                 _autoBurnConfigs,
                 totalAutoBurnedByPool,

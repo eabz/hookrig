@@ -32,8 +32,25 @@ library AccessControlLogic {
         return HookPermissionMasks.isValidTier3Bitmap(bitmap);
     }
 
+    function validateBitmapAndPermissions(uint32 bitmap, uint160 hookAddr) external pure {
+        if (!HookPermissionMasks.isValidTier3Bitmap(bitmap)) {
+            revert IHookRigOrchestrator.InvalidBlockBitmap(bitmap);
+        }
+        // Only enforce preset-specific permission subset when deployed at a non-full-orchestrator address
+        uint160 fullFlags = uint160(0x3CA8);
+        if ((hookAddr & fullFlags) != fullFlags) {
+            if (
+                ((bitmap & HookPermissionMasks.BIT_TWAMM) != 0 && (hookAddr & (1 << 13)) == 0)
+                    || ((bitmap & HookPermissionMasks.AFTER_SWAP_RETURN_DELTA_BLOCKS_MASK) != 0
+                        && (hookAddr & (1 << 2)) == 0)
+            ) {
+                revert IHookRigOrchestrator.InvalidBlockBitmap(bitmap);
+            }
+        }
+    }
+
     function resolveBitmap(IHookRigBlock.PresetId presetId, uint32 enabledBlocksBitmap)
-        public
+        internal
         pure
         returns (uint32 bitmap)
     {
@@ -58,6 +75,12 @@ library AccessControlLogic {
         bool isLaunchpad = config.authorizedCurve != address(0);
         if (isLaunchpad && msg.sender != launchpadFactory) {
             revert HookRigBase.OnlyLaunchpadFactory(msg.sender);
+        }
+        if (
+            !isLaunchpad && config.poolAdmin != address(0) && msg.sender != config.poolAdmin
+                && msg.sender != launchpadFactory
+        ) {
+            revert HookRigBase.OnlyPoolAdmin(msg.sender);
         }
 
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, poolId);
@@ -181,19 +204,16 @@ library AccessControlLogic {
         revert AccountNotAllowlisted(poolId, user);
     }
 
-    function resolveUser(
-        mapping(address => bool) storage isTrustedRouter,
-        address routerSender,
-        bytes calldata hookData
-    ) external view returns (address user) {
+    function resolveUser(mapping(address => bool) storage isTrustedRouter, address routerSender, bytes calldata)
+        external
+        view
+        returns (address user)
+    {
         if (isTrustedRouter[routerSender]) {
             try IMsgSender(routerSender).msgSender() returns (address resolved) {
                 return resolved != address(0) ? resolved : routerSender;
             } catch {
-                if (hookData.length >= 32) {
-                    user = abi.decode(hookData[:32], (address));
-                    if (user != address(0)) return user;
-                }
+                return routerSender;
             }
         }
         return routerSender;

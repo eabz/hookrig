@@ -33,6 +33,7 @@ abstract contract Snapshots is Base {
         // Oracle and anti-snipe
         int24 oLast;
         int56 oCum;
+        uint32 oTs;
         uint32 snipeStart;
         // Launch curve (poolCurves[i])
         uint8 launchState;
@@ -185,6 +186,7 @@ abstract contract Snapshots is Base {
         ps.poolPoints = orchestrator.totalPoolSwapPoints(pid);
         (ps.sqrtP, ps.tick,, ps.lpFee) = StateLibrary.getSlot0(poolManager, pid);
         (ps.oLast, ps.oCum) = orchestrator.getOracleTickCumulative(pid);
+        (,, ps.oTs) = orchestrator.observeOracleAtCurrentTime(pid);
         ps.snipeStart = orchestrator.antiSnipeState(pid).startBlock;
 
         for (uint256 a; a < claimants.length; a++) {

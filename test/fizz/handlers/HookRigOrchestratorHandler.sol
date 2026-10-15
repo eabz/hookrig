@@ -530,6 +530,17 @@ abstract contract HookRigOrchestratorHandler is Properties {
         );
     }
 
+    /// @notice Exercises view getters, preset hooks, bitmap validations, and reverting block guard paths.
+    function hookRigOrchestrator_exerciseCoverage(uint8 branch) public {
+        coverageHelper.run(
+            branch,
+            poolKeys[POOL_MULTI],
+            xykCurves.length > 0 ? address(xykCurves[0]) : address(0),
+            trancheCurves.length > 0 ? address(trancheCurves[0]) : address(0),
+            launchTokens.length > 0 ? launchTokens[0] : address(0)
+        );
+    }
+
     // ――――――――――――――――――――― Secondary clamping ―――――――――――――――――――――
 
     /// @notice Registers a fuzzed (cap-respecting) stack on an existing pool (usually POOL_UNREGISTERED, which is

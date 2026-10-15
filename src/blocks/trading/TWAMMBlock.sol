@@ -68,8 +68,10 @@ library TWAMMLogic {
         if (durationSeconds == 0 || durationSeconds > MAX_TWAMM_DURATION || totalAmount < durationSeconds) {
             revert InvalidTWAMMInterval();
         }
+        uint128 rate = uint128(Math.mulDiv(totalAmount, 1, durationSeconds, Math.Rounding.Floor));
         executePending(states, orders, activeOrderIds, poolId);
-        if (activeOrderIds[poolId].length >= MAX_ACTIVE_TWAMM_ORDERS) {
+        uint256[] storage ids = activeOrderIds[poolId];
+        if (ids.length >= MAX_ACTIVE_TWAMM_ORDERS) {
             revert MaxActiveTWAMMOrdersReached(poolId);
         }
 
@@ -84,7 +86,6 @@ library TWAMMLogic {
             if (token.balanceOf(address(this)) - balBefore != totalAmount) revert InvalidTWAMMInterval();
         }
 
-        uint128 rate = uint128(Math.mulDiv(totalAmount, 1, durationSeconds, Math.Rounding.Floor));
         uint64 expiry = uint64(block.timestamp) + durationSeconds;
 
         TWAMMState storage state = states[poolId];
@@ -104,7 +105,7 @@ library TWAMMLogic {
             expirationTimestamp: expiry,
             cancelled: false
         });
-        activeOrderIds[poolId].push(orderId);
+        ids.push(orderId);
 
         emit TWAMMOrderSubmitted(orderId, poolId, msg.sender, zeroForOne, rate, expiry);
     }
@@ -121,31 +122,30 @@ library TWAMMLogic {
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(order.poolId)) revert TWAMMPoolKeyMismatch();
 
         executePending(states, orders, activeOrderIds, order.poolId);
-        if (order.cancelled || block.timestamp >= order.expirationTimestamp) {
+        if (order.cancelled) {
             revert TWAMMOrderNotActive(orderId);
         }
 
         order.cancelled = true;
-        TWAMMState storage state = states[order.poolId];
-        if (order.zeroForOne) {
-            state.sellRate0For1 =
-                state.sellRate0For1 >= order.sellRatePerSecond ? state.sellRate0For1 - order.sellRatePerSecond : 0;
-        } else {
-            state.sellRate1For0 =
-                state.sellRate1For0 >= order.sellRatePerSecond ? state.sellRate1For0 - order.sellRatePerSecond : 0;
-        }
+        if (block.timestamp < order.expirationTimestamp) {
+            TWAMMState storage state = states[order.poolId];
+            if (order.zeroForOne) {
+                state.sellRate0For1 -= order.sellRatePerSecond;
+            } else {
+                state.sellRate1For0 -= order.sellRatePerSecond;
+            }
 
-        uint256[] storage ids = activeOrderIds[order.poolId];
-        for (uint256 i = 0; i < ids.length; i++) {
-            if (ids[i] == orderId) {
-                ids[i] = ids[ids.length - 1];
-                ids.pop();
-                break;
+            uint256[] storage ids = activeOrderIds[order.poolId];
+            for (uint256 i = 0; i < ids.length; i++) {
+                if (ids[i] == orderId) {
+                    ids[i] = ids[ids.length - 1];
+                    ids.pop();
+                    break;
+                }
             }
         }
 
-        uint256 streamed = uint256(order.sellRatePerSecond) * uint256(uint64(block.timestamp) - order.startTimestamp);
-        refundAmount = order.totalAmount > streamed ? uint256(order.totalAmount) - streamed : 0;
+        refundAmount = order.totalAmount;
         if (refundAmount > 0) {
             Currency inputCurrency = order.zeroForOne ? key.currency0 : key.currency1;
             inputCurrency.transfer(msg.sender, refundAmount);
@@ -178,43 +178,22 @@ library TWAMMLogic {
         uint256 i = 0;
         while (i < ids.length) {
             TWAMMOrder storage order = orders[ids[i]];
-            if (order.cancelled) {
-                ids[i] = ids[ids.length - 1];
-                ids.pop();
-                continue;
-            }
-            if (order.expirationTimestamp <= lastTs) {
-                if (order.zeroForOne) {
-                    state.sellRate0For1 = state.sellRate0For1 >= order.sellRatePerSecond
-                        ? state.sellRate0For1 - order.sellRatePerSecond
-                        : 0;
-                } else {
-                    state.sellRate1For0 = state.sellRate1For0 >= order.sellRatePerSecond
-                        ? state.sellRate1For0 - order.sellRatePerSecond
-                        : 0;
-                }
-                ids[i] = ids[ids.length - 1];
-                ids.pop();
-                continue;
-            }
             uint64 endTs = order.expirationTimestamp < nowTs ? order.expirationTimestamp : nowTs;
-            uint256 activeSeconds = uint256(endTs - lastTs);
-            uint256 vol = uint256(order.sellRatePerSecond) * activeSeconds;
-            if (order.zeroForOne) {
-                v0 += vol;
-            } else {
-                v1 += vol;
+            if (endTs > lastTs) {
+                uint256 activeSeconds = uint256(endTs - lastTs);
+                uint256 vol = uint256(order.sellRatePerSecond) * activeSeconds;
+                if (order.zeroForOne) {
+                    v0 += vol;
+                } else {
+                    v1 += vol;
+                }
             }
 
             if (order.expirationTimestamp <= nowTs) {
                 if (order.zeroForOne) {
-                    state.sellRate0For1 = state.sellRate0For1 >= order.sellRatePerSecond
-                        ? state.sellRate0For1 - order.sellRatePerSecond
-                        : 0;
+                    state.sellRate0For1 -= order.sellRatePerSecond;
                 } else {
-                    state.sellRate1For0 = state.sellRate1For0 >= order.sellRatePerSecond
-                        ? state.sellRate1For0 - order.sellRatePerSecond
-                        : 0;
+                    state.sellRate1For0 -= order.sellRatePerSecond;
                 }
                 ids[i] = ids[ids.length - 1];
                 ids.pop();
@@ -247,23 +226,18 @@ library TWAMMLogic {
         uint256[] storage ids = activeOrderIds[poolId];
         for (uint256 i = 0; i < ids.length; i++) {
             TWAMMOrder storage order = orders[ids[i]];
-            if (order.cancelled || order.expirationTimestamp <= lastTs) continue;
             uint64 endTs = order.expirationTimestamp < nowTs ? order.expirationTimestamp : nowTs;
             uint256 activeSeconds = uint256(endTs - lastTs);
             uint256 vol = uint256(order.sellRatePerSecond) * activeSeconds;
             if (order.zeroForOne) {
                 projected.accruedVirtualVolume0 += vol;
                 if (order.expirationTimestamp <= nowTs) {
-                    projected.sellRate0For1 = projected.sellRate0For1 >= order.sellRatePerSecond
-                        ? projected.sellRate0For1 - order.sellRatePerSecond
-                        : 0;
+                    projected.sellRate0For1 -= order.sellRatePerSecond;
                 }
             } else {
                 projected.accruedVirtualVolume1 += vol;
                 if (order.expirationTimestamp <= nowTs) {
-                    projected.sellRate1For0 = projected.sellRate1For0 >= order.sellRatePerSecond
-                        ? projected.sellRate1For0 - order.sellRatePerSecond
-                        : 0;
+                    projected.sellRate1For0 -= order.sellRatePerSecond;
                 }
             }
         }

@@ -86,9 +86,7 @@ contract HookRigOrchestrator is
 
     /// @notice Virtual internal hook for Tier 3 bitmap validation (allows fuzz harness synthetic bitmaps).
     function _validateBitmapCompatibility(uint32 bitmap) internal view virtual {
-        if (!AccessControlLogic.checkValidTier3Bitmap(bitmap)) {
-            revert InvalidBlockBitmap(bitmap);
-        }
+        AccessControlLogic.validateBitmapAndPermissions(bitmap, uint160(address(this)));
     }
 
     /// @notice Registers a composable block stack or preset for a standard or launchpad Uniswap v4 pool.
@@ -211,14 +209,18 @@ contract HookRigOrchestrator is
         return IHooks.beforeInitialize.selector;
     }
 
-    function _afterInitialize(address, PoolKey calldata key, uint160, int24 tick)
+    function _afterInitialize(address sender, PoolKey calldata key, uint160, int24 tick)
         internal
         virtual
         override
         returns (bytes4)
     {
         PoolId poolId = key.toId();
-        uint32 bitmap = _poolMeta[poolId].enabledBlocksBitmap;
+        PoolRuntimeMeta storage meta = _poolMeta[poolId];
+        if (meta.isLaunchpadPool && sender != meta.authorizedCurve && sender != launchpadFactory) {
+            revert UnauthorizedPoolInitializer(sender);
+        }
+        uint32 bitmap = meta.enabledBlocksBitmap;
 
         AntiSnipeLogic.resetGraduationClocks(
             _poolMeta, _antiSnipeStates, _walletCapStates, _kingStates, poolId, launchpadFactory, false
@@ -273,6 +275,14 @@ contract HookRigOrchestrator is
                 && !(meta.isLaunchpadPool && sender == meta.authorizedCurve)
         ) {
             _recordLPAddition(poolId, sender, user, params);
+        }
+
+        if (
+            (bitmap & HookPermissionMasks.BIT_AUTO_BUYBACK) != 0
+                && (_autoBuybackStates[poolId].reserveByCurrency[key.currency0] > 0
+                    || _autoBuybackStates[poolId].reserveByCurrency[key.currency1] > 0)
+        ) {
+            TransientContext.markLiquidityAdded(poolId);
         }
 
         return IHooks.beforeAddLiquidity.selector;
@@ -402,8 +412,9 @@ contract HookRigOrchestrator is
         }
 
         if ((bitmap & HookPermissionMasks.BIT_SWAP_REWARDS) != 0) {
-            uint256 netRewardVolume =
-                ctx.grossUnspecifiedAmount > totalCutAmount ? ctx.grossUnspecifiedAmount - totalCutAmount : 0;
+            uint256 netRewardVolume = ctx.unspecifiedCurrency == ctx.projectCurrency
+                ? (ctx.grossUnspecifiedAmount > totalCutAmount ? ctx.grossUnspecifiedAmount - totalCutAmount : 0)
+                : ctx.settledSpecifiedAmount;
             _accrueSwapRewards(poolId, ctx.trader, netRewardVolume);
         }
 

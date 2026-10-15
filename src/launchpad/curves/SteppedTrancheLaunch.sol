@@ -114,12 +114,8 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         if (recipient == address(0)) recipient = msg.sender;
 
         uint16 surchargeBps = currentAntiSnipeSurchargeBps();
-        uint256 remainingQuoteToTarget = trancheConfig.graduationQuoteTarget > realQuoteRaised
-            ? trancheConfig.graduationQuoteTarget - realQuoteRaised
-            : 0;
-        uint256 maxGrossInput = surchargeBps < 10_000
-            ? Math.mulDiv(remainingQuoteToTarget, 10_000, 10_000 - surchargeBps, Math.Rounding.Ceil)
-            : quoteAmountIn;
+        uint256 remainingQuoteToTarget = trancheConfig.graduationQuoteTarget - realQuoteRaised;
+        uint256 maxGrossInput = Math.mulDiv(remainingQuoteToTarget, 10_000, 10_000 - surchargeBps, Math.Rounding.Ceil);
         uint256 quoteUsed = quoteAmountIn > maxGrossInput && maxGrossInput > 0 ? maxGrossInput : quoteAmountIn;
 
         surcharge = Math.mulDiv(quoteUsed, surchargeBps, 10_000, Math.Rounding.Ceil);
@@ -127,20 +123,14 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
 
         {
             uint256 priceQ96 = currentMarginalPriceQ96();
-            uint256 remainingTokens = trancheConfig.curveTokenAllocation > curveTokensSold
-                ? trancheConfig.curveTokenAllocation - curveTokensSold
-                : 0;
+            uint256 remainingTokens = trancheConfig.curveTokenAllocation - curveTokensSold;
             tokensOut = Math.mulDiv(netQuoteForTokens, uint256(1) << 96, priceQ96, Math.Rounding.Floor);
             if (tokensOut > remainingTokens) {
                 tokensOut = remainingTokens;
-                netQuoteForTokens = Math.mulDiv(tokensOut, priceQ96, uint256(1) << 96, Math.Rounding.Floor);
-                quoteUsed = surchargeBps < 10_000
-                    ? Math.mulDiv(netQuoteForTokens, 10_000, 10_000 - surchargeBps, Math.Rounding.Floor)
-                    : netQuoteForTokens;
+                netQuoteForTokens = Math.mulDiv(tokensOut, priceQ96, uint256(1) << 96, Math.Rounding.Ceil);
+                quoteUsed = Math.mulDiv(netQuoteForTokens, 10_000, 10_000 - surchargeBps, Math.Rounding.Ceil);
                 surcharge = Math.mulDiv(quoteUsed, surchargeBps, 10_000, Math.Rounding.Ceil);
-                netQuoteForTokens = quoteUsed - surcharge;
-                tokensOut = Math.mulDiv(netQuoteForTokens, uint256(1) << 96, priceQ96, Math.Rounding.Floor);
-                if (tokensOut > remainingTokens) tokensOut = remainingTokens;
+                netQuoteForTokens = quoteUsed > surcharge ? quoteUsed - surcharge : 0;
             }
         }
         if (tokensOut < minTokensOut) {
@@ -200,9 +190,6 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
             Math.mulDiv(tokenAmountIn, uint256(trancheConfig.basePriceQ96), uint256(1) << 96, Math.Rounding.Floor);
         uint256 proRataCap = Math.mulDiv(realQuoteRaised, tokenAmountIn, curveTokensSold, Math.Rounding.Floor);
         quoteOut = baseRedemption < proRataCap ? baseRedemption : proRataCap;
-        if (quoteOut > realQuoteRaised) {
-            quoteOut = realQuoteRaised;
-        }
         if (quoteOut < minQuoteOut) {
             revert SlippageExceeded(quoteOut, minQuoteOut);
         }

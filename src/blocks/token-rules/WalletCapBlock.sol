@@ -93,6 +93,9 @@ library WalletCapLogic {
         } else {
             uint256 sold = isExactInput ? settledSpecifiedAmount : (grossUnspecifiedAmount + totalCutAmount);
             uint256 prevExpected = TransientContext.getWalletCapExpectedBalance(poolId, trader);
+            if (prevExpected == 0 && !projectCurrency.isAddressZero()) {
+                prevExpected = IERC20(Currency.unwrap(projectCurrency)).balanceOf(trader);
+            }
             TransientContext.setWalletCapExpectedBalance(poolId, trader, prevExpected > sold ? prevExpected - sold : 0);
         }
     }

@@ -185,12 +185,15 @@ contract LaunchpadFactory is ITokenLaunchpad {
     ) internal pure {
         uint32 resolvedBitmap = HookPermissionMasks.getPresetBitmap(stackConfig.presetId)
         | stackConfig.enabledBlocksBitmap;
-        uint16 effectivePoolCapBps = stackConfig.walletCap.maxWalletBps > 0 ? stackConfig.walletCap.maxWalletBps : 200;
-        if (
-            (resolvedBitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0 && curveWalletCapBps > 0
-                && effectivePoolCapBps < curveWalletCapBps
-        ) {
-            revert PostGraduationWalletCapBelowCurveCap(stackConfig.walletCap.maxWalletBps, curveWalletCapBps);
+        if ((resolvedBitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0) {
+            uint16 effectivePoolCapBps =
+                stackConfig.walletCap.maxWalletBps > 0 ? stackConfig.walletCap.maxWalletBps : 200;
+            if (curveWalletCapBps > 0 && effectivePoolCapBps < curveWalletCapBps) {
+                revert PostGraduationWalletCapBelowCurveCap(stackConfig.walletCap.maxWalletBps, curveWalletCapBps);
+            }
+            if (stackConfig.walletCap.maxWalletBps == 0) {
+                stackConfig.walletCap.maxWalletBps = 200;
+            }
         }
     }
 
@@ -229,12 +232,13 @@ contract LaunchpadFactory is ITokenLaunchpad {
         LaunchCurveType curveType
     ) internal returns (address token, PoolKey memory key) {
         token = _deployTokenAndVest(meta, Currency.unwrap(quoteCurrency), curve, salt);
+        address creator = meta.creator;
 
         // Because `token > quoteAddr`, `currency0` is always `quoteCurrency` and `currency1` is always `token`
         stackConfig.isToken0ProjectToken = false;
         stackConfig.authorizedCurve = curve;
         if (stackConfig.poolAdmin == address(0)) {
-            stackConfig.poolAdmin = meta.creator;
+            stackConfig.poolAdmin = creator;
         }
 
         key = PoolKey({
@@ -250,17 +254,13 @@ contract LaunchpadFactory is ITokenLaunchpad {
         tokenToCurve[token] = curve;
         totalLaunches++;
 
-        emit TokenLaunched(token, curve, curveType, key.toId(), stackConfig.presetId, meta.creator);
+        emit TokenLaunched(token, curve, curveType, key.toId(), stackConfig.presetId, creator);
     }
 
     function _deployTokenAndVest(LaunchTokenMetadata calldata meta, address quoteAddr, address curve, bytes32 salt)
         internal
         returns (address token)
     {
-        if (meta.creatorVestingBps > MAX_CREATOR_VESTING_BPS) {
-            revert CreatorVestingExceedsCap(meta.creatorVestingBps);
-        }
-
         HookRigToken deployed =
             new HookRigToken{salt: salt}(meta.name, meta.symbol, meta.totalSupply, address(this), meta.creator);
         token = address(deployed);
@@ -274,7 +274,7 @@ contract LaunchpadFactory is ITokenLaunchpad {
         if (meta.creatorVestingBps > 0 && meta.creator != address(0)) {
             vestingAmount = Math.mulDiv(meta.totalSupply, meta.creatorVestingBps, 10_000, Math.Rounding.Floor);
             uint64 duration = meta.vestingDurationSeconds >= 30 days ? meta.vestingDurationSeconds : 180 days;
-            VestingWallet vest = new VestingWallet(meta.creator, uint64(block.timestamp), duration);
+            VestingWallet vest = new VestingWallet(meta.creator, uint64(block.timestamp + 1 hours), duration);
             tokenToCreatorVesting[token] = address(vest);
             IERC20(token).safeTransfer(address(vest), vestingAmount);
         }

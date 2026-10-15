@@ -66,7 +66,9 @@ library ArbRecaptureLogic {
         if (rawCutBps > MAX_ARB_EFFECTIVE_CUT_BPS) {
             rawCutBps = MAX_ARB_EFFECTIVE_CUT_BPS;
         }
-        state.referenceTick = postSwapTick;
+        if (rawCutBps > 0) {
+            state.referenceTick = postSwapTick;
+        }
         effectiveCutBps = uint16(rawCutBps);
     }
 

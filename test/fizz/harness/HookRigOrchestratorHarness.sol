@@ -72,7 +72,24 @@ contract HookRigOrchestratorHarness is HookRigOrchestrator {
         return _computeAntiSnipeFee(poolId);
     }
 
-    function _beforeInitialize(address sender, PoolKey calldata key, uint160) internal view override returns (bytes4) {
+    bool public strictMode;
+
+    function setStrictMode(bool s) external {
+        strictMode = s;
+    }
+
+    function forceBucketFilled(PoolId poolId, int24 tick, bool zeroForOne, bool filled) external {
+        _limitOrderBuckets[poolId][tick][zeroForOne].filled = filled;
+    }
+
+    function _beforeInitialize(address sender, PoolKey calldata key, uint160 sqrtPriceX96)
+        internal
+        override
+        returns (bytes4)
+    {
+        if (strictMode) {
+            return super._beforeInitialize(sender, key, sqrtPriceX96);
+        }
         PoolId poolId = key.toId();
         PoolRuntimeMeta storage meta = _poolMeta[poolId];
         if (meta.isLaunchpadPool && sender != meta.authorizedCurve && sender != launchpadFactory) {
@@ -84,13 +101,16 @@ contract HookRigOrchestratorHarness is HookRigOrchestrator {
         return IHooks.beforeInitialize.selector;
     }
 
-    function _validateBitmapCompatibility(uint32) internal pure override {}
-
-    function _protocolRoyaltyBps() internal pure override returns (uint16) {
-        return 0;
+    function _validateBitmapCompatibility(uint32 bitmap) internal view override {
+        if (strictMode) {
+            super._validateBitmapCompatibility(bitmap);
+        }
     }
 
-    function _swapFilledOrderOnClaim() internal pure override returns (bool) {
-        return true;
+    function _protocolRoyaltyBps() internal view override returns (uint16) {
+        if (strictMode) {
+            return super._protocolRoyaltyBps();
+        }
+        return 0;
     }
 }

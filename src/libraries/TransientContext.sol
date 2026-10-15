@@ -9,6 +9,7 @@ library TransientContext {
     bytes32 private constant SNAPSHOT_NAMESPACE = keccak256("hookrig.transient.swapSnapshot.v1");
     bytes32 private constant INTERNAL_EXEC_NAMESPACE = keccak256("hookrig.transient.internalExec.v1");
     bytes32 private constant WALLET_CAP_NAMESPACE = keccak256("hookrig.transient.walletCapBalance.v1");
+    bytes32 private constant LIQUIDITY_ADDED_NAMESPACE = keccak256("hookrig.transient.lpAdded.v1");
 
     struct PreSwapSnapshot {
         uint160 sqrtPriceX96;
@@ -68,5 +69,21 @@ library TransientContext {
         assembly ("memory-safe") {
             tstore(slot, bal)
         }
+    }
+
+    function markLiquidityAdded(PoolId poolId) internal {
+        bytes32 slot = keccak256(abi.encodePacked(LIQUIDITY_ADDED_NAMESPACE, PoolId.unwrap(poolId)));
+        assembly ("memory-safe") {
+            tstore(slot, 1)
+        }
+    }
+
+    function wasLiquidityAddedInTx(PoolId poolId) internal view returns (bool added) {
+        bytes32 slot = keccak256(abi.encodePacked(LIQUIDITY_ADDED_NAMESPACE, PoolId.unwrap(poolId)));
+        uint256 val;
+        assembly ("memory-safe") {
+            val := tload(slot)
+        }
+        added = (val == 1);
     }
 }

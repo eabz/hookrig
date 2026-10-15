@@ -52,7 +52,15 @@ library CircuitBreakerLogic {
             cb.anchorTick = preSwapTick;
             cb.windowStartTimestamp = uint32(block.timestamp);
         } else if (block.timestamp >= uint256(cb.windowStartTimestamp) + uint256(cb.windowSeconds)) {
-            cb.anchorTick = preSwapTick;
+            int256 maxDev = int256(cb.maxWindowTickDeviation);
+            int256 prevAnchor = int256(cb.anchorTick);
+            int256 nextAnchor = int256(preSwapTick);
+            if (nextAnchor > prevAnchor + maxDev) {
+                nextAnchor = prevAnchor + maxDev;
+            } else if (nextAnchor < prevAnchor - maxDev) {
+                nextAnchor = prevAnchor - maxDev;
+            }
+            cb.anchorTick = int24(nextAnchor);
             cb.windowStartTimestamp = uint32(block.timestamp);
         }
 

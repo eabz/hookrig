@@ -1,33 +1,11 @@
 {
-  "generatedAt": "2026-10-15T09:49:31.408Z",
+  "generatedAt": "2026-10-15T13:51:55.903Z",
   "snapshotPath": "fizz_data/last-run.json",
   "hasDrift": true,
   "contracts": {
     "added": [],
     "removed": [],
-    "changed": [
-      {
-        "name": "HookRigOrchestrator",
-        "sourcePath": "src/HookRigOrchestrator.sol",
-        "functionsAdded": [
-          {
-            "signature": "cancelTWAMMOrder(PoolKey,uint256)",
-            "name": "cancelTWAMMOrder",
-            "tier": "primary",
-            "handlerMethodName": "hookRigOrchestrator_cancelTWAMMOrder"
-          },
-          {
-            "signature": "setBuySellTax(PoolId,uint16,uint16,address)",
-            "name": "setBuySellTax",
-            "tier": "primary",
-            "handlerMethodName": "hookRigOrchestrator_setBuySellTax"
-          }
-        ],
-        "functionsRemoved": [],
-        "functionsChanged": [],
-        "tierChanged": []
-      }
-    ],
+    "changed": [],
     "sourcesChanged": [
       {
         "name": "HookRigOrchestrator",
@@ -49,14 +27,7 @@
   },
   "handlers": {
     "orphan": [],
-    "modified": [
-      {
-        "file": "HookRigTokenHandler.sol"
-      },
-      {
-        "file": "PoolManagerHandler.sol"
-      }
-    ],
+    "modified": [],
     "missing": []
   },
   "properties": {

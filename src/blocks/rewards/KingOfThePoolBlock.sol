@@ -134,23 +134,17 @@ library KingOfThePoolLogic {
             _rollKingRound(settledRounds, poolId, state);
         }
 
-        if (potContribution > 0) {
-            if (state.currentPotAmount > 0 && Currency.unwrap(state.potCurrency) != Currency.unwrap(cutCurrency)) {
-                if (state.currentKing == address(0) && buyer != address(0)) {
-                    state.currentKing = buyer;
-                }
-                if (state.currentKing != address(0)) {
-                    _rollKingRound(settledRounds, poolId, state);
-                }
-            }
+        if (potContribution > 0 && (state.currentPotAmount == 0 || state.potCurrency == cutCurrency)) {
             if (state.currentPotAmount == 0) {
                 state.potCurrency = cutCurrency;
             }
-            require(Currency.unwrap(state.potCurrency) == Currency.unwrap(cutCurrency), "CurrencyMismatch");
             state.currentPotAmount += potContribution;
         }
 
-        if (buyer != address(0) && grossBuyOutput >= state.minBuyAmountForReset) {
+        if (
+            buyer != address(0) && grossBuyOutput >= state.minBuyAmountForReset
+                && (potContribution > 0 || (state.currentPotAmount > 0 && state.currentKing == address(0)))
+        ) {
             state.currentKing = buyer;
             state.roundDeadline = uint64(block.timestamp + state.roundDurationSeconds);
             emit NewKingCrowned(
@@ -171,12 +165,17 @@ library KingOfThePoolLogic {
         uint256 totalCutAmount
     ) external returns (uint256 newTotalCut) {
         newTotalCut = totalCutAmount;
-        uint16 potBps = states[poolId].potFeeOnBuyBps;
+        KingRoundState storage st = states[poolId];
+        uint16 potBps = st.potFeeOnBuyBps;
         if (potBps > 0) {
+            if (block.timestamp >= st.roundDeadline && st.currentKing != address(0) && st.currentPotAmount > 0) {
+                _rollKingRound(settledRounds, poolId, st);
+            }
             Math.Rounding rounding = isExactInput ? Math.Rounding.Floor : Math.Rounding.Ceil;
             uint256 maxAllowedTotalCut = Math.mulDiv(grossAmount, 2500, 10_000, rounding);
             uint256 potCut = 0;
-            if (newTotalCut < maxAllowedTotalCut) {
+            if (newTotalCut < maxAllowedTotalCut && (st.currentPotAmount == 0 || st.potCurrency == unspecifiedCurrency))
+            {
                 potCut = Math.mulDiv(grossAmount, potBps, 10_000, rounding);
                 if (newTotalCut + potCut > maxAllowedTotalCut) {
                     potCut = maxAllowedTotalCut - newTotalCut;
@@ -254,7 +253,7 @@ library KingOfThePoolLogic {
         KingRoundState storage st = states[poolId];
         if (
             (meta.enabledBlocksBitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0
-                && currency == meta.projectCurrency && (st.currentPotAmount == 0 || st.potCurrency == currency)
+                && (st.currentPotAmount == 0 || st.potCurrency == currency)
         ) {
             st.potCurrency = currency;
             st.currentPotAmount += amount;

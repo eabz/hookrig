@@ -160,7 +160,12 @@ library LimitOrdersLogic {
             if (bucket.totalInputAmount == 0) {
                 bucket.filled = false;
             } else {
-                revert BucketAlreadyFilled(orderId);
+                (, int24 currentTick,,) = StateLibrary.getSlot0(IHasPoolManager(address(this)).poolManager(), poolId);
+                if (zeroForOne ? currentTick > targetTick : currentTick < targetTick) {
+                    bucket.filled = false;
+                } else {
+                    revert BucketAlreadyFilled(orderId);
+                }
             }
         }
 
@@ -313,7 +318,6 @@ library LimitOrdersLogic {
         bool movedUp = postSwapTick > prevTick;
         int24 step = tickSpacing;
         uint256 stepsChecked = 0;
-        int24 lastReached = postSwapTick;
 
         if (movedUp) {
             int24 rem = prevTick % step;
@@ -321,16 +325,11 @@ library LimitOrdersLogic {
             int24 t = aligned;
             for (; t <= postSwapTick && stepsChecked < MAX_TICK_FILLS_PER_SWAP; t += step) {
                 stepsChecked++;
-                lastReached = t;
                 LimitOrderBucket storage b = buckets[poolId][t][false];
                 if (b.totalInputAmount > 0 && !b.filled) {
                     b.filled = true;
                     emit LimitOrderTickCrossed(poolId, t, false, b.totalInputAmount);
                 }
-            }
-            if (t <= postSwapTick) {
-                lastTicks[poolId] = lastReached;
-                return;
             }
         } else {
             int24 rem = prevTick % step;
@@ -338,16 +337,11 @@ library LimitOrdersLogic {
             int24 t = aligned;
             for (; t >= postSwapTick && stepsChecked < MAX_TICK_FILLS_PER_SWAP; t -= step) {
                 stepsChecked++;
-                lastReached = t;
                 LimitOrderBucket storage b = buckets[poolId][t][true];
                 if (b.totalInputAmount > 0 && !b.filled) {
                     b.filled = true;
                     emit LimitOrderTickCrossed(poolId, t, true, b.totalInputAmount);
                 }
-            }
-            if (t >= postSwapTick) {
-                lastTicks[poolId] = lastReached;
-                return;
             }
         }
 
@@ -379,7 +373,7 @@ abstract contract LimitOrdersBlock is IHookRigBlock {
     }
 
     function _swapFilledOrderOnClaim() internal view virtual returns (bool) {
-        return false;
+        return true;
     }
 
     function placeLimitOrder(PoolKey calldata key, int24 targetTick, bool zeroForOne, uint128 inputAmount)

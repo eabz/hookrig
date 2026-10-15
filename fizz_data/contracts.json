@@ -1346,6 +1346,11 @@
           "name": "_poolManager",
           "type": "contract",
           "internalType": "IPoolManager"
+        },
+        {
+          "name": "_hook",
+          "type": "address",
+          "internalType": "address"
         }
       ],
       "stateMutability": "nonpayable"

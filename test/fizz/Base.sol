@@ -11,6 +11,7 @@ import {Math} from "./utils/Math.sol";
 import {StringUtils} from "./utils/StringUtils.sol";
 import {EnumerableSet} from "./utils/EnumerableSet.sol";
 import {LaunchpadDeployer} from "./utils/LaunchpadDeployer.sol";
+import {CoverageHelper} from "./utils/CoverageHelper.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -218,6 +219,7 @@ abstract contract Base is StringUtils, Clamp, Deployer, Math {
     HookRigTestRouter internal trustedRouter;
     /// @notice Untrusted router: the hook resolves the user from `hookData[0:32]` (or the router itself).
     HookRigTestRouter internal plainRouter;
+    CoverageHelper internal coverageHelper;
 
     MockBurnableERC20 internal token0; // quote side of standard pools and launch curves
     MockBurnableERC20 internal token1; // project side of standard pools
@@ -285,6 +287,9 @@ abstract contract Base is StringUtils, Clamp, Deployer, Math {
         (token0, token1) = address(tA) < address(tB) ? (tA, tB) : (tB, tA);
         trackedCurrencies.push(Currency.wrap(address(token0)));
         trackedCurrencies.push(Currency.wrap(address(token1)));
+
+        coverageHelper =
+            new CoverageHelper(poolManager, orchestrator, launchpadFactory, trustedRouter, plainRouter, token0, token1);
 
         vm.label(address(poolManager), "PoolManager");
         vm.label(address(orchestrator), "HookRigOrchestrator");
@@ -358,9 +363,14 @@ abstract contract Base is StringUtils, Clamp, Deployer, Math {
         _launchVirtualXYK(xykStack, _defaultXYKConfig());
 
         IHookRigBlock.PoolStackConfig memory trancheStack;
-        trancheStack.enabledBlocksBitmap = HookPermissionMasks.BIT_KING_OF_THE_POOL;
+        trancheStack.enabledBlocksBitmap = HookPermissionMasks.BIT_KING_OF_THE_POOL | HookPermissionMasks.BIT_AUTO_BURN
+            | HookPermissionMasks.BIT_MARKET_HOURS_FEE;
         trancheStack.kingOfThePool = IHookRigBlock.KingOfThePoolParams({
             potFeeOnBuyBps: 200, roundDurationSeconds: 600, minBuyAmountForReset: 1 ether
+        });
+        trancheStack.autoBurn = IHookRigBlock.AutoBurnParams({burnOnBuyBps: 100, useTokenBurnCall: false});
+        trancheStack.marketHoursFee = IHookRigBlock.MarketHoursFeeParams({
+            openHourUtc: 20, closeHourUtc: 13, openFee: 1500, closedFee: 4000, weekendClosed: true
         });
         _launchSteppedTranche(trancheStack, _defaultTrancheConfig());
     }

@@ -559,11 +559,11 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         vm.expectRevert(LimitOrdersLogic.OrderPoolKeyMismatch.selector);
         orchestrator.claimLimitOrder(wrongKey, orderId);
 
-        // Alice claims her filled limit order -> funds are NEVER frozen!
-        uint256 balBefore = token0.balanceOf(alice);
+        // Alice claims her filled limit order -> funds are NEVER frozen and swap into output currency!
+        uint256 balBefore = token1.balanceOf(alice);
         vm.prank(alice);
         orchestrator.claimLimitOrder(key, orderId);
-        assertEq(token0.balanceOf(alice) - balBefore, 100 ether);
+        assertGt(token1.balanceOf(alice) - balBefore, 90 ether);
     }
 
     /// @notice Anti-Freeze #2: `AutoBuyback` burns prior accumulated ERC-6909 reserves when floor defense triggers

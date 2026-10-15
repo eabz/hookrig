@@ -10,6 +10,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 import {HookPermissionMasks} from "../../libraries/HookPermissionMasks.sol";
 import {PoolTokenDir} from "../../libraries/PoolTokenDir.sol";
+import {TransientContext} from "../../libraries/TransientContext.sol";
 import {KingOfThePoolLogic} from "./KingOfThePoolBlock.sol";
 
 library AutoBuybackLogic {
@@ -74,7 +75,10 @@ library AutoBuybackLogic {
         bool isBelowFloor =
             isToken0ProjectToken ? (postSwapTick >= st.triggerFloorTick) : (postSwapTick <= st.triggerFloorTick);
 
-        if (hasActiveLiquidity && st.minBuybackReserve > 0 && newReserve >= st.minBuybackReserve && isBelowFloor) {
+        if (
+            hasActiveLiquidity && !TransientContext.wasLiquidityAddedInTx(poolId) && st.minBuybackReserve > 0
+                && newReserve >= st.minBuybackReserve && isBelowFloor
+        ) {
             deployedToFloor = newReserve;
             st.reserveByCurrency[cutCurrency] = 0;
             st.totalFloorDefendedAmount += deployedToFloor;

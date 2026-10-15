@@ -67,9 +67,17 @@ contract NativeTickLaunch is ITokenLaunchpad, IUnlockCallback {
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
         if (msg.sender != address(poolManager)) revert OnlyPoolManagerUnlock();
         NativeTickBand[] memory bands = abi.decode(data, (NativeTickBand[]));
+        int24 spacing = poolKey.tickSpacing;
 
         for (uint256 i = 0; i < bands.length; i++) {
             if (bands[i].tokenAmount == 0) continue;
+            if (
+                bands[i].tickLower >= bands[i].tickUpper || bands[i].tickLower < TickMath.MIN_TICK
+                    || bands[i].tickUpper > TickMath.MAX_TICK || bands[i].tickLower % spacing != 0
+                    || bands[i].tickUpper % spacing != 0
+            ) {
+                continue;
+            }
             uint160 sqrtPriceLowerX96 = TickMath.getSqrtPriceAtTick(bands[i].tickLower);
             uint160 sqrtPriceUpperX96 = TickMath.getSqrtPriceAtTick(bands[i].tickUpper);
             uint128 liq =

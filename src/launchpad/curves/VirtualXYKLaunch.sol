@@ -63,6 +63,9 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         external
     {
         if (launchState != LaunchState.Uninitialized || msg.sender != factory) revert AlreadyInitialized();
+        if (_config.virtualTokenReserve < _config.curveTokenAllocation || _config.virtualQuoteReserve == 0) {
+            revert ZeroAmount();
+        }
 
         poolKey = _poolKey;
         poolId = _poolKey.toId();
@@ -160,11 +163,6 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         uint256 newVirtualToken = virtualTokenReserve + tokenAmountIn;
         uint256 newVirtualQuote = Math.mulDiv(invariantK, 1, newVirtualToken, Math.Rounding.Ceil);
         quoteOut = virtualQuoteReserve > newVirtualQuote ? virtualQuoteReserve - newVirtualQuote : 0;
-        bool clamped = false;
-        if (quoteOut > realQuoteRaised) {
-            quoteOut = realQuoteRaised;
-            clamped = true;
-        }
         if (quoteOut < minQuoteOut) {
             revert SlippageExceeded(quoteOut, minQuoteOut);
         }
@@ -173,9 +171,6 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         virtualQuoteReserve -= quoteOut;
         realQuoteRaised -= quoteOut;
         curveTokensSold -= tokenAmountIn;
-        if (clamped) {
-            invariantK = virtualQuoteReserve * virtualTokenReserve;
-        }
 
         quoteCurrency.transfer(recipient, quoteOut);
 

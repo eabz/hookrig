@@ -347,26 +347,24 @@ abstract contract Properties is PropertiesAsserts, Snapshots {
     function property_GL19_oracleBounds() public {
         if (!_snapshotsValid()) return;
         uint256 n = _commonPools();
-        uint256 dt = stateAfter.timestamp - stateBefore.timestamp;
         for (uint256 i; i < n; i++) {
             PoolSnap storage b = stateBefore.pools[i];
             PoolSnap storage a = stateAfter.pools[i];
             if ((a.bitmap & HookPermissionMasks.BIT_ORACLE) == 0) continue;
             gte(int256(a.oLast), int256(TickMath.MIN_TICK), "GL-19: oracle lastTick below MIN_TICK");
             lte(int256(a.oLast), int256(TickMath.MAX_TICK), "GL-19: oracle lastTick above MAX_TICK");
-            if (b.sqrtP == 0) continue; // oracle initialized during this call
+            if (b.sqrtP == 0 || b.oTs == 0) continue; // oracle initialized during this call
 
+            uint32 dt = uint32(stateAfter.timestamp) - b.oTs;
             if (dt == 0) {
                 eq(int256(a.oLast), int256(b.oLast), "GL-19: oracle lastTick changed within one timestamp");
                 eq(int256(a.oCum), int256(b.oCum), "GL-19: oracle tickCumulative changed within one timestamp");
                 continue;
             }
-            // Bound against the latest checkpoint time known to precede this call (a lower bound, so loose-safe)
-            uint256 start = ghosts.oracleWindowStart[i];
-            if (a.oLast == b.oLast || start == 0 || start > stateAfter.timestamp) continue;
+            if (a.oLast == b.oLast) continue;
             int256 move = int256(a.oLast) - int256(b.oLast);
             uint256 absMove = uint256(move >= 0 ? move : -move);
-            lte(absMove, 100 * (stateAfter.timestamp - start), "GL-19: oracle lastTick moved > 100 ticks per second");
+            lte(absMove, 100 * uint256(dt), "GL-19: oracle lastTick moved > 100 ticks per second");
         }
     }
 

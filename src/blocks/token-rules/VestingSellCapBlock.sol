@@ -49,7 +49,9 @@ library VestingSellCapLogic {
 
         if (ep.epochIndex != currentEpoch || ep.startOfEpochBalance == 0) {
             uint256 currentBal = IERC20(Currency.unwrap(projectCurrency)).balanceOf(seller);
-            if (currentBal == 0) {
+            if (currentBal > 0 && currentBal < tokensSold) {
+                currentBal += tokensSold;
+            } else if (currentBal == 0) {
                 currentBal = tokensSold;
             }
             ep.epochIndex = currentEpoch;

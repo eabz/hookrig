@@ -91,12 +91,11 @@ library DynamicFeeLogic {
 
         uint24 absDelta = uint24(uint256(tickDelta > 1000 ? int256(1000) : tickDelta));
         if (block.number > state.lastUpdateBlock) {
-            state.rollingVolatilityTicks = (state.rollingVolatilityTicks * 3 + absDelta) / 4;
+            state.rollingVolatilityTicks = (state.rollingVolatilityTicks * 3 + absDelta + (absDelta > 0 ? 3 : 0)) / 4;
             state.lastObservedTick = currentTick;
             state.lastUpdateBlock = uint32(block.number);
         } else if (absDelta > state.rollingVolatilityTicks) {
-            state.rollingVolatilityTicks = (state.rollingVolatilityTicks * 3 + absDelta) / 4;
-            state.lastObservedTick = currentTick;
+            state.rollingVolatilityTicks = (state.rollingVolatilityTicks * 3 + absDelta + 3) / 4;
         }
 
         uint24 threshold = uint24(state.volatilityTickThreshold);

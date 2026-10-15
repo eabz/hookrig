@@ -55,8 +55,10 @@ library MEVProtectionLogic {
             ? int256(postSwapTick) - int256(preSwapTick)
             : int256(preSwapTick) - int256(postSwapTick);
         if (maxDelta > 0) {
-            if (state.lastSwapBlock != uint32(block.number)) {
+            bool isNewBlock = state.lastSwapBlock != uint32(block.number);
+            if (isNewBlock) {
                 state.blockStartTick = preSwapTick;
+                state.lastSwapBlock = uint32(block.number);
             }
             int256 blockDelta = postSwapTick >= state.blockStartTick
                 ? int256(postSwapTick) - int256(state.blockStartTick)
@@ -66,14 +68,15 @@ library MEVProtectionLogic {
                 int24 clampedDelta = worst > int256(type(int24).max) ? type(int24).max : int24(worst);
                 revert SwapPriceImpactExceeded(clampedDelta, maxDelta);
             }
-            if (delta > 0 && state.lastSwapBlock == uint32(block.number) && state.lastSwapZeroForOne != zeroForOne) {
+            int256 dirThreshold = int256(maxDelta) / 20;
+            if (dirThreshold < 2) dirThreshold = 2;
+            if (!isNewBlock && delta >= dirThreshold && state.lastSwapZeroForOne != zeroForOne) {
                 int24 clampedDelta = delta > int256(type(int24).max) ? type(int24).max : int24(delta);
                 revert SwapPriceImpactExceeded(clampedDelta, maxDelta);
             }
-        }
-        if (delta > 0) {
-            state.lastSwapBlock = uint32(block.number);
-            state.lastSwapZeroForOne = zeroForOne;
+            if (isNewBlock || delta >= dirThreshold) {
+                state.lastSwapZeroForOne = zeroForOne;
+            }
         }
     }
 }

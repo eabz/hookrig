@@ -21,7 +21,9 @@ library JITGuardLogic {
         address lpOwner,
         ModifyLiquidityParams calldata params
     ) external {
-        bytes32 senderKey = keccak256(abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt));
+        bytes32 senderKey = (params.salt == bytes32(0) && lpOwner != sender)
+            ? keccak256(abi.encodePacked(sender, lpOwner, params.tickLower, params.tickUpper, params.salt))
+            : keccak256(abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt));
         lpAddedBlock[poolId][senderKey] = uint32(block.number);
         if (lpOwner != sender) {
             bytes32 userKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
@@ -44,7 +46,9 @@ library JITGuardLogic {
         }
         if (minHold == 0) return;
 
-        bytes32 senderKey = keccak256(abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt));
+        bytes32 senderKey = (params.salt == bytes32(0) && lpOwner != sender)
+            ? keccak256(abi.encodePacked(sender, lpOwner, params.tickLower, params.tickUpper, params.salt))
+            : keccak256(abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt));
         uint32 addedBlock = lpAddedBlock[poolId][senderKey];
         if (lpOwner != sender) {
             bytes32 userKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
