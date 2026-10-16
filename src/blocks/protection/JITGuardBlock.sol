@@ -57,6 +57,43 @@ library JITGuardLogic {
         lpTrackedLiquidity[poolId][key] = tracked >= removedLiq ? tracked - removedLiq : 0;
     }
 
+    function _posKey(address account, ModifyLiquidityParams calldata params) private pure returns (bytes32) {
+        return keccak256(abi.encodePacked(account, params.tickLower, params.tickUpper, params.salt));
+    }
+
+    function _ownerKey(address sender, address lpOwner, ModifyLiquidityParams calldata params)
+        private
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encodePacked(sender, lpOwner, params.tickLower, params.tickUpper, params.salt));
+    }
+
+    function _resolveAddedBlock(
+        mapping(PoolId => mapping(bytes32 => uint32)) storage lpAddedBlock,
+        PoolId poolId,
+        address sender,
+        address lpOwner,
+        ModifyLiquidityParams calldata params,
+        bytes32 ownerKey,
+        bool isolatedOwnerTimer
+    ) private view returns (uint32 addedBlock) {
+        if (isolatedOwnerTimer) {
+            return lpAddedBlock[poolId][ownerKey];
+        }
+        addedBlock = lpAddedBlock[poolId][_posKey(sender, params)];
+        uint32 ownerAdded = lpAddedBlock[poolId][ownerKey];
+        if (ownerAdded > addedBlock) {
+            addedBlock = ownerAdded;
+        }
+        if (lpOwner != sender) {
+            uint32 userAdded = lpAddedBlock[poolId][_posKey(lpOwner, params)];
+            if (userAdded > addedBlock) {
+                addedBlock = userAdded;
+            }
+        }
+    }
+
     /// @notice Records an LP addition with per-owner and per-position liquidity tracking (`S4-F08`) and
     ///         a 5% anti-griefing dust floor on shared default-salt positions (`S2-F41`).
     function recordAddition(
@@ -71,15 +108,11 @@ library JITGuardLogic {
         if (addedLiq == 0) return;
 
         bool zeroSalt = params.salt == bytes32(0);
-        bytes32 posKey = keccak256(abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt));
-        bytes32 ownerKey = keccak256(abi.encodePacked(sender, lpOwner, params.tickLower, params.tickUpper, params.salt));
-
-        _trackAddKey(lpAddedBlock, lpTrackedLiquidity, poolId, ownerKey, addedLiq, zeroSalt);
-        _trackAddKey(lpAddedBlock, lpTrackedLiquidity, poolId, posKey, addedLiq, zeroSalt);
+        _trackAddKey(lpAddedBlock, lpTrackedLiquidity, poolId, _ownerKey(sender, lpOwner, params), addedLiq, zeroSalt);
+        _trackAddKey(lpAddedBlock, lpTrackedLiquidity, poolId, _posKey(sender, params), addedLiq, zeroSalt);
 
         if (lpOwner != sender) {
-            bytes32 userKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
-            _trackAddKey(lpAddedBlock, lpTrackedLiquidity, poolId, userKey, addedLiq, zeroSalt);
+            _trackAddKey(lpAddedBlock, lpTrackedLiquidity, poolId, _posKey(lpOwner, params), addedLiq, zeroSalt);
         }
     }
 
@@ -95,13 +128,11 @@ library JITGuardLogic {
         uint32 minHold = cfg.minLPHoldBlocks > 0 ? cfg.minLPHoldBlocks : (cfg.jitExitPenaltyBps > 0 ? 1 : 0);
         if (minHold == 0) return;
 
-        bytes32 senderKey = (params.salt == bytes32(0) && lpOwner != sender)
-            ? keccak256(abi.encodePacked(sender, lpOwner, params.tickLower, params.tickUpper, params.salt))
-            : keccak256(abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt));
+        bytes32 senderKey =
+            (params.salt == bytes32(0) && lpOwner != sender) ? _ownerKey(sender, lpOwner, params) : _posKey(sender, params);
         uint32 addedBlock = lpAddedBlock[poolId][senderKey];
         if (lpOwner != sender) {
-            bytes32 userKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
-            uint32 userAdded = lpAddedBlock[poolId][userKey];
+            uint32 userAdded = lpAddedBlock[poolId][_posKey(lpOwner, params)];
             if (userAdded > addedBlock) {
                 addedBlock = userAdded;
             }
@@ -124,36 +155,19 @@ library JITGuardLogic {
         address lpOwner,
         ModifyLiquidityParams calldata params
     ) external {
-        uint32 minHold;
-        {
-            JITConfig storage cfg = configs[poolId];
-            minHold = cfg.minLPHoldBlocks > 0 ? cfg.minLPHoldBlocks : (cfg.jitExitPenaltyBps > 0 ? 1 : 0);
+        uint32 minHold = configs[poolId].minLPHoldBlocks;
+        if (minHold == 0 && configs[poolId].jitExitPenaltyBps > 0) {
+            minHold = 1;
         }
 
         uint256 removedLiq = params.liquidityDelta < 0 ? uint256(-params.liquidityDelta) : 0;
-        bytes32 posKey = keccak256(abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt));
-        bytes32 ownerKey = keccak256(abi.encodePacked(sender, lpOwner, params.tickLower, params.tickUpper, params.salt));
-        uint256 ownerTracked = lpTrackedLiquidity[poolId][ownerKey];
+        bytes32 ownerKey = _ownerKey(sender, lpOwner, params);
 
         if (minHold > 0) {
-            uint32 addedBlock;
-            if (params.salt == bytes32(0) && lpOwner != sender && removedLiq > 0 && ownerTracked >= removedLiq) {
-                addedBlock = lpAddedBlock[poolId][ownerKey];
-            } else {
-                addedBlock = lpAddedBlock[poolId][posKey];
-                uint32 ownerAdded = lpAddedBlock[poolId][ownerKey];
-                if (ownerAdded > addedBlock) {
-                    addedBlock = ownerAdded;
-                }
-                if (lpOwner != sender) {
-                    bytes32 userKey =
-                        keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
-                    uint32 userAdded = lpAddedBlock[poolId][userKey];
-                    if (userAdded > addedBlock) {
-                        addedBlock = userAdded;
-                    }
-                }
-            }
+            bool isolatedOwnerTimer = params.salt == bytes32(0) && lpOwner != sender && removedLiq > 0
+                && lpTrackedLiquidity[poolId][ownerKey] >= removedLiq;
+            uint32 addedBlock =
+                _resolveAddedBlock(lpAddedBlock, poolId, sender, lpOwner, params, ownerKey, isolatedOwnerTimer);
             if (addedBlock > 0 && block.number < uint256(addedBlock) + uint256(minHold)) {
                 revert JITLiquidityCooldownActive(addedBlock, uint32(block.number), minHold);
             }
@@ -161,10 +175,9 @@ library JITGuardLogic {
 
         if (removedLiq > 0) {
             _decrementKey(lpTrackedLiquidity, poolId, ownerKey, removedLiq);
-            _decrementKey(lpTrackedLiquidity, poolId, posKey, removedLiq);
+            _decrementKey(lpTrackedLiquidity, poolId, _posKey(sender, params), removedLiq);
             if (lpOwner != sender) {
-                bytes32 userKey = keccak256(abi.encodePacked(lpOwner, params.tickLower, params.tickUpper, params.salt));
-                _decrementKey(lpTrackedLiquidity, poolId, userKey, removedLiq);
+                _decrementKey(lpTrackedLiquidity, poolId, _posKey(lpOwner, params), removedLiq);
             }
         }
     }

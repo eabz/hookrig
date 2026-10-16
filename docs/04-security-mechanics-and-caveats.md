@@ -125,7 +125,7 @@ Every block in `hookrig` is assigned an explicit **Trust Level** (`Low` vs. `Med
 
 ## 5. Verification & Testing Standards (Foundry + Medusa + Echidna)
 
-Every `hookrig` block, preset, and launchpad curve is verified across **67 Foundry test suites** and **91 Medusa stateful fuzzing tests (`56 properties: 26 Global GL-01..GL-26 + 30 Specific SP-01..SP-30`)** achieving **84%–100% line coverage across all 35 `src/` contracts** (see [**06. Attack Vectors, Mitigations & Code-Level Fixes**](./06-attack-vectors-and-fixes.md) and [**PROPERTIES.md**](../PROPERTIES.md)):
+Every `hookrig` block, preset, and launchpad curve is verified across **95 Foundry tests** (`unit`, `presets`, `launchpad`, `invariant`, `fizz/FoundryTester`, and `HoodiForkIntegration`) and **91 Medusa stateful fuzzing tests (`56 properties: 26 Global GL-01..GL-26 + 30 Specific SP-01..SP-30`)** achieving **84%–100% line coverage across all 35 `src/` contracts** (see [**06. Deployments & Network Integration**](./06-deployments.md), [**Agentic Security Audit Report**](../audit/agentic/2026-10-15.pdf), and [**PROPERTIES.md**](../PROPERTIES.md)):
 
 1. **Permission Bitmap & Tier-3 Mutex Invariant Test**: Automated verification that `Hooks.Permissions` matches the 14-bit address flags across all 12 presets and all `2,843` valid Tier-3 block combinations.
 2. **Delta Conservation & Full ERC-6909 Solvency (`GL-01`, `GL-02`, `SP-09`)**: Stateful Medusa & Foundry invariant fuzzing proving that across arbitrary sequences of `swap` (exact-in & exact-out), `modifyLiquidity`, `donate`, and `claim`, `PoolManager` + Hook ERC-6909 claims + King pots + AutoBuyback reserves remain strictly solvent (`sum(claims + pots + reserves) <= actual_erc6909_balance`).

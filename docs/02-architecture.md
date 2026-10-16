@@ -71,8 +71,7 @@ hookrig/
 │   ├── 03-hooks-flow.md
 │   ├── 04-security-mechanics-and-caveats.md
 │   ├── 05-token-launch-mechanics.md
-│   ├── 06-attack-vectors-and-fixes.md
-│   └── 07-roadmap-and-todo.md
+│   └── 06-deployments.md
 ├── src/
 │   ├── HookRigOrchestrator.sol            # Master composable Uniswap v4 hook orchestrator
 │   ├── interfaces/

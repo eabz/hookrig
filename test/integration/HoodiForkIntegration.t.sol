@@ -286,6 +286,35 @@ contract HoodiForkIntegrationTest is Test {
             HookPermissionMasks.BIT_MANAGED_FEE | HookPermissionMasks.BIT_LIMIT_ORDERS | HookPermissionMasks.BIT_TWAMM;
     }
 
+    function _mineHookSalt(
+        address deployer,
+        uint160 flags,
+        bytes memory creationCode,
+        bytes memory constructorArgs
+    ) internal returns (address hookAddress, bytes32 salt) {
+        vm.pauseGasMetering();
+        flags = flags & Hooks.ALL_HOOK_MASK;
+        bytes32 initCodeHash = keccak256(abi.encodePacked(creationCode, constructorArgs));
+        uint160 mask = Hooks.ALL_HOOK_MASK;
+        bytes memory buf = new bytes(85);
+        for (uint256 s = 0; s < HookMiner.MAX_LOOP; s++) {
+            address candidate;
+            assembly ("memory-safe") {
+                mstore8(add(buf, 0x20), 0xff)
+                mstore(add(buf, 0x21), shl(96, deployer))
+                mstore(add(buf, 0x35), s)
+                mstore(add(buf, 0x55), initCodeHash)
+                candidate := and(keccak256(add(buf, 0x20), 85), 0xffffffffffffffffffffffffffffffffffffffff)
+            }
+            if ((uint160(candidate) & mask) == flags && candidate.code.length == 0) {
+                vm.resumeGasMetering();
+                return (candidate, bytes32(s));
+            }
+        }
+        vm.resumeGasMetering();
+        revert("HookMiner: could not find salt");
+    }
+
     function _deployProtocolOnHoodi() internal {
         string memory hoodiRpc = vm.envOr("HOODI_RPC_URL", string("https://ethereum-hoodi-rpc.publicnode.com"));
         if (block.chainid != HOODI_CHAIN_ID) {
@@ -305,7 +334,7 @@ contract HoodiForkIntegrationTest is Test {
         router = new HookRigTestRouter(poolManager);
 
         // Mine real CREATE2 salt & deploy HookRigOrchestrator (NO vm.etch — real BaseHook constructor check!)
-        (address minedOrchestratorAddr, bytes32 orchestratorSalt) = HookMiner.find(
+        (address minedOrchestratorAddr, bytes32 orchestratorSalt) = _mineHookSalt(
             address(this),
             ORCHESTRATOR_HOOK_FLAGS,
             type(HookRigOrchestrator).creationCode,
@@ -316,7 +345,7 @@ contract HoodiForkIntegrationTest is Test {
         assertEq(uint160(address(orchestrator)) & Hooks.ALL_HOOK_MASK, ORCHESTRATOR_HOOK_FLAGS);
 
         // Mine real CREATE2 salt & deploy a standalone concrete preset hook (`FairLaunchPresetHook`)
-        (address minedPresetAddr, bytes32 presetSalt) = HookMiner.find(
+        (address minedPresetAddr, bytes32 presetSalt) = _mineHookSalt(
             address(this),
             FAIR_LAUNCH_HOOK_FLAGS,
             type(FairLaunchPresetHook).creationCode,
@@ -642,6 +671,7 @@ contract HoodiForkIntegrationTest is Test {
             vm.prank(admin);
             orchestrator.registerPoolStack(key, cfg);
 
+            vm.prank(admin);
             poolManager.initialize(key, SQRT_PRICE_1_1);
 
             vm.prank(admin);
