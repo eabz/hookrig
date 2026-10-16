@@ -246,7 +246,7 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         if (launchState != LaunchState.ActiveBonding) revert CurveNotActive();
         if (
             block.number
-                <= uint256(launchCreationBlock) + uint256(trancheConfig.antiSnipeBlocks) + MAX_ANTI_SNIPE_BLOCKS
+                    <= uint256(launchCreationBlock) + uint256(trancheConfig.antiSnipeBlocks) + MAX_ANTI_SNIPE_BLOCKS
                 || curveTokensSold > 0
         ) {
             revert CurveNotActive();

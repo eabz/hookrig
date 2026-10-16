@@ -155,7 +155,10 @@ abstract contract AfterSwapDeltaAggregator is
         }
 
         // 6. King of the Pool
-        if ((bitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0 && ctx.isBuy && ctx.unspecifiedCurrency == ctx.projectCurrency) {
+        if (
+            (bitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0 && ctx.isBuy
+                && ctx.unspecifiedCurrency == ctx.projectCurrency
+        ) {
             totalCutAmount = KingOfThePoolLogic.processWaterfallKing(
                 _kingStates,
                 _settledKingRounds,

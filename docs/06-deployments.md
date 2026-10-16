@@ -16,7 +16,10 @@ The full HookRig protocol suite is configured and verified against the **Ethereu
 | **Arachnid `CREATE2` Proxy** | `0x4e59b44847b379578588920cA78FbF26c0B4956C` | Canonical deterministic deployment proxy |
 | **`PoolManager` (Uniswap v4)** | `0x6a37d6D4162E640f9f60df8537a82436B8777a6d` | Deployed Uniswap v4 singleton |
 | **`HoodiSwapRouter`** | `0x8a0eb1d76D2f9aa068E6e6e136D4062C7dEde293` | Trusted swap router (`IMsgSender` enabled) |
-| **`HookRigOrchestrator` (`CREATE2`)** | `0x11539cdfb9bca19FCDb1bcDa1D9D61aEcEcCFAc4` | Mined with hook flags `0x3DC4` |
+| **`HookRigOrchestrator` (`CREATE2`)** | `0x8b8aaE92b123292118b300850c404769806Ebac4` | Mined with hook flags `0x3DC4` |
+| **`VirtualXYKLaunch` (Implementation)** | `0xddDfCED926fF6eB7AbDc2d4Dc13b9925eb09cAC2` | Master implementation for `LaunchpadFactory` |
+| **`SteppedTrancheLaunch` (Implementation)** | `0xd56568E706E1dF687E7C513545af819541CE5D98` | Master implementation for `LaunchpadFactory` |
+| **`NativeTickLaunch` (Implementation)** | `0x1c8576B9533cd096a2575c44f742EaEcd5B39d74` | Master implementation for `LaunchpadFactory` |
 | **`LaunchpadFactory`** | `0xc8B5B61D23A96a669F7048744d47BCc0aeDeb269` | Clones `VirtualXYK`, `SteppedTranche`, and `NativeTick` curves |
 | **`HRIG` Launch Token (`CREATE2`)** | `0x21b580070a2277bC791b852A32b8236f138Ee79F` | Sender-bound salt `keccak256(deployer, salt)` |
 | **`VirtualXYKLaunch` Clone** | `0x2C92cb44485512e6c3771e5CE18C8Dc595431Ba2` | Graduated into Uniswap v4 with `298.11e18` active liquidity |
