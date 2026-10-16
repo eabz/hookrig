@@ -49,7 +49,8 @@ abstract contract AfterSwapDeltaAggregator is
         PoolKey calldata,
         PoolId poolId,
         uint32 bitmap,
-        PoolTokenDir.SwapContext memory ctx
+        PoolTokenDir.SwapContext memory ctx,
+        bool traderIsSender
     ) internal returns (int128 totalHookDeltaUnspecified, uint256 totalCutAmount) {
         if ((bitmap & HookPermissionMasks.AFTER_SWAP_RETURN_DELTA_BLOCKS_MASK) == 0 || ctx.grossUnspecifiedAmount == 0)
         {
@@ -67,6 +68,7 @@ abstract contract AfterSwapDeltaAggregator is
 
         // LP donation cuts are always taken and queued; `flushPendingDonations` pays them out on a later swap.
         uint256 lpDonationAmount = 0;
+        address attributedTrader = traderIsSender ? address(0) : ctx.trader;
 
         // 0. Static 5 bps (0.05%) Protocol Royalty
         totalCutAmount = BuySellTaxLogic.processWaterfallRoyalty(
@@ -162,7 +164,7 @@ abstract contract AfterSwapDeltaAggregator is
                 _settledKingRounds,
                 manager,
                 poolId,
-                ctx.trader,
+                attributedTrader,
                 ctx.unspecifiedCurrency,
                 ctx.grossUnspecifiedAmount,
                 ctx.isExactInput,
@@ -178,7 +180,7 @@ abstract contract AfterSwapDeltaAggregator is
                 traderReferrer,
                 manager,
                 poolId,
-                ctx.trader,
+                attributedTrader,
                 ctx.unspecifiedCurrency,
                 ctx.grossUnspecifiedAmount,
                 ctx.isExactInput,

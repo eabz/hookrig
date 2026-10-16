@@ -132,6 +132,19 @@ library KingOfThePoolLogic {
         uint256 potContribution,
         uint256 grossBuyOutput
     ) public {
+        processBuy(states, settledRounds, poolId, buyer, cutCurrency, potContribution, grossBuyOutput, false);
+    }
+
+    function processBuy(
+        mapping(PoolId => KingRoundState) storage states,
+        mapping(PoolId => mapping(uint64 => SettledKingRound)) storage settledRounds,
+        PoolId poolId,
+        address buyer,
+        Currency cutCurrency,
+        uint256 potContribution,
+        uint256 grossBuyOutput,
+        bool buyerIsUntrustedRouter
+    ) public {
         KingRoundState storage state = states[poolId];
         if (state.potFeeOnBuyBps == 0) return;
 
@@ -147,7 +160,7 @@ library KingOfThePoolLogic {
         }
 
         if (
-            buyer != address(0) && grossBuyOutput >= state.minBuyAmountForReset
+            !buyerIsUntrustedRouter && buyer != address(0) && grossBuyOutput >= state.minBuyAmountForReset
                 // A non-dust buy takes the crown whenever there is a pot to win, even when it added no pot cut
                 // (a seed held in another currency, or the 25% cut cap already filled by earlier blocks). A buy
                 // whose nominal pot fee rounds to zero is dust and never takes the crown.
@@ -172,8 +185,33 @@ library KingOfThePoolLogic {
         Currency unspecifiedCurrency,
         uint256 grossAmount,
         bool isExactInput,
-        uint256 totalCutAmount
+        uint256 totalCutAmount,
+        bool buyerIsUntrustedRouter
     ) external returns (uint256 newTotalCut) {
+        return processWaterfallKing(
+            states,
+            settledRounds,
+            manager,
+            poolId,
+            buyerIsUntrustedRouter ? address(0) : trader,
+            unspecifiedCurrency,
+            grossAmount,
+            isExactInput,
+            totalCutAmount
+        );
+    }
+
+    function processWaterfallKing(
+        mapping(PoolId => KingRoundState) storage states,
+        mapping(PoolId => mapping(uint64 => SettledKingRound)) storage settledRounds,
+        IPoolManager manager,
+        PoolId poolId,
+        address trader,
+        Currency unspecifiedCurrency,
+        uint256 grossAmount,
+        bool isExactInput,
+        uint256 totalCutAmount
+    ) public returns (uint256 newTotalCut) {
         newTotalCut = totalCutAmount;
         KingRoundState storage st = states[poolId];
         uint16 potBps = st.potFeeOnBuyBps;
@@ -195,7 +233,7 @@ library KingOfThePoolLogic {
                 newTotalCut += potCut;
                 manager.mint(address(this), unspecifiedCurrency.toId(), potCut);
             }
-            processBuy(states, settledRounds, poolId, trader, unspecifiedCurrency, potCut, grossAmount);
+            processBuy(states, settledRounds, poolId, trader, unspecifiedCurrency, potCut, grossAmount, false);
         }
     }
 
@@ -254,15 +292,19 @@ library KingOfThePoolLogic {
         address launchpadFactory
     ) external {
         HookRigBase.PoolRuntimeMeta storage meta = poolMeta[poolId];
-        if (msg.sender != meta.authorizedCurve && msg.sender != launchpadFactory) {
+        bool isAuthorizedCurve =
+            meta.isLaunchpadPool && meta.authorizedCurve != address(0) && msg.sender == meta.authorizedCurve;
+        bool isAuthorizedFactory = launchpadFactory != address(0) && msg.sender == launchpadFactory;
+        if (!isAuthorizedCurve && !isAuthorizedFactory) {
             revert HookRigBase.OnlyAuthorizedCurve(msg.sender);
         }
         if (amount == 0) return;
         KingRoundState storage st = states[poolId];
-        // Only a live King pot may receive the seed; curves route the surcharge to LP otherwise, so no pool admin
-        // can ever be credited with buyer surcharges.
+        // Only a live Round 1 King pot before any buyer is crowned may receive the seed; curves route the surcharge
+        // to LP otherwise, so no pool admin can ever be credited with buyer surcharges or inflate an active round.
         if (
             (meta.enabledBlocksBitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) == 0 || st.potFeeOnBuyBps == 0
+                || st.currentRoundId != 1 || st.currentKing != address(0)
                 || (st.currentPotAmount != 0 && !(st.potCurrency == currency))
         ) {
             revert KingPotSeedNotAccepted(poolId);
@@ -301,7 +343,27 @@ abstract contract KingOfThePoolBlock is IHookRigBlock {
         uint256 grossBuyOutput
     ) internal {
         KingOfThePoolLogic.processBuy(
-            _kingStates, _settledKingRounds, poolId, buyer, cutCurrency, potContribution, grossBuyOutput
+            _kingStates, _settledKingRounds, poolId, buyer, cutCurrency, potContribution, grossBuyOutput, false
+        );
+    }
+
+    function _processKingOfThePoolBuy(
+        PoolId poolId,
+        address buyer,
+        Currency cutCurrency,
+        uint256 potContribution,
+        uint256 grossBuyOutput,
+        bool buyerIsUntrustedRouter
+    ) internal {
+        KingOfThePoolLogic.processBuy(
+            _kingStates,
+            _settledKingRounds,
+            poolId,
+            buyer,
+            cutCurrency,
+            potContribution,
+            grossBuyOutput,
+            buyerIsUntrustedRouter
         );
     }
 

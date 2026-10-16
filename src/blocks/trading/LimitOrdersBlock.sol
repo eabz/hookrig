@@ -113,16 +113,31 @@ contract LimitOrderSwapExecutor is IUnlockCallback, IMsgSender {
     }
 }
 
+/// @notice Tick-indexed stop/trigger limit order logic.
+/// @dev Stop/trigger direction semantics (`S4-L15`, `S3-L04`):
+///      - `zeroForOne == true` orders escrow `currency0` to sell for `currency1` when the pool tick crosses downward
+///        to or below `targetTick` (`postSwapTick <= targetTick <= prevTick`, i.e. stop-loss / downward trigger).
+///      - `zeroForOne == false` orders escrow `currency1` to sell for `currency0` when the pool tick crosses upward
+///        to or above `targetTick` (`prevTick <= targetTick <= postSwapTick`, i.e. stop-buy / upward trigger).
+///      - Triggered buckets are marked filled and swapped at the prevailing pool price upon `claimLimitOrder` (protected
+///        by the caller's `minAmountOut` floor).
+///      Tick-traversal bound (`S4-L16`):
+///      - `processCrossedTicks` inspects at most `MAX_TICK_FILLS_PER_SWAP = 512` aligned ticks per swap to bound
+///        `afterSwap` gas consumption. If an extreme single swap jumps across more than `512` spaced ticks, ticks
+///        beyond `prevTick +/- 512 * tickSpacing` are not marked filled in that swap and `lastTicks[poolId]` advances
+///        to `postSwapTick` (makers can always recover escrowed input via `cancelLimitOrder`).
 library LimitOrdersLogic {
     using PoolIdLibrary for PoolKey;
     using SafeERC20 for IERC20;
 
+    /// @notice Maximum number of spaced ticks traversed per swap in `processCrossedTicks` (`S4-L16`).
     uint256 internal constant MAX_TICK_FILLS_PER_SWAP = 512;
 
     struct LimitOrderBucket {
         uint128 totalInputAmount;
         uint128 filledOutputAmount;
         bool filled;
+        uint64 epoch;
     }
 
     struct UserLimitOrder {
@@ -132,6 +147,7 @@ library LimitOrdersLogic {
         bool zeroForOne;
         uint128 inputAmount;
         bool claimedOrCancelled;
+        uint64 epoch;
     }
 
     event LimitOrderPlaced(
@@ -179,10 +195,12 @@ library LimitOrdersLogic {
         if (bucket.filled) {
             if (bucket.totalInputAmount == 0) {
                 bucket.filled = false;
+                bucket.epoch++;
             } else {
                 (, int24 currentTick,,) = StateLibrary.getSlot0(IHasPoolManager(address(this)).poolManager(), poolId);
                 if (zeroForOne ? currentTick > targetTick : currentTick < targetTick) {
                     bucket.filled = false;
+                    bucket.epoch++;
                 } else {
                     revert BucketAlreadyFilled(orderId);
                 }
@@ -207,7 +225,8 @@ library LimitOrdersLogic {
             targetTick: targetTick,
             zeroForOne: zeroForOne,
             inputAmount: inputAmount,
-            claimedOrCancelled: false
+            claimedOrCancelled: false,
+            epoch: bucket.epoch
         });
 
         bucket.totalInputAmount += inputAmount;
@@ -232,8 +251,9 @@ library LimitOrdersLogic {
         LimitOrderBucket storage bucket = buckets[order.poolId][order.targetTick][order.zeroForOne];
         order.claimedOrCancelled = true;
         bucket.totalInputAmount -= order.inputAmount;
-        if (bucket.totalInputAmount == 0) {
+        if (bucket.totalInputAmount == 0 && bucket.filled) {
             bucket.filled = false;
+            bucket.epoch++;
         }
 
         Currency inputCurrency = order.zeroForOne ? key.currency0 : key.currency1;
@@ -272,12 +292,14 @@ library LimitOrdersLogic {
 
         {
             LimitOrderBucket storage bucket = buckets[order.poolId][order.targetTick][order.zeroForOne];
-            if (!bucket.filled) revert BucketNotYetFilled(orderId);
+            bool isFilled = (order.epoch < bucket.epoch) || bucket.filled;
+            if (!isFilled) revert BucketNotYetFilled(orderId);
 
             order.claimedOrCancelled = true;
             bucket.totalInputAmount -= order.inputAmount;
-            if (bucket.totalInputAmount == 0) {
+            if (bucket.totalInputAmount == 0 && bucket.filled) {
                 bucket.filled = false;
+                bucket.epoch++;
             }
         }
 
@@ -379,8 +401,15 @@ interface IHasPoolManager {
 }
 
 /// @title LimitOrdersBlock
-/// @notice Group 5 (Trading) — Block #15: Tick-indexed on-chain limit orders (`afterInitialize`, `afterSwap`).
+/// @notice Group 5 (Trading) — Block #15: Tick-indexed on-chain stop/trigger limit orders (`afterInitialize`, `afterSwap`).
 /// @dev Trust Level: Low (users can always cancel unfilled orders or claim filled orders; bounded tick traversal per swap).
+///      - Direction & trigger semantics (`S4-L15`, `S3-L04`): `zeroForOne == true` orders trigger when the pool tick crosses
+///        downward to or below `targetTick` (stop-loss / momentum sell of `currency0`), whereas `zeroForOne == false`
+///        orders trigger when the pool tick crosses upward to or above `targetTick` (stop-buy / upward trigger selling
+///        `currency1`). Claiming swaps the escrowed input at the current pool price subject to `minAmountOut`.
+///      - Traversal bound (`S4-L16`): Each swap checks at most `LimitOrdersLogic.MAX_TICK_FILLS_PER_SWAP` (512) spaced
+///        ticks. Epoch-indexed buckets (`S4-L13`) ensure filled orders remain claimable even after subsequent orders
+///        re-arm the same `(targetTick, zeroForOne)` bucket in a later epoch.
 abstract contract LimitOrdersBlock is IHookRigBlock {
     using PoolIdLibrary for PoolKey;
 
@@ -401,6 +430,8 @@ abstract contract LimitOrdersBlock is IHookRigBlock {
         return true;
     }
 
+    /// @notice Places a tick-triggered order (`zeroForOne == true` triggers on downward crossing `<= targetTick`;
+    ///         `zeroForOne == false` triggers on upward crossing `>= targetTick`).
     function placeLimitOrder(PoolKey calldata key, int24 targetTick, bool zeroForOne, uint128 inputAmount)
         external
         payable

@@ -39,6 +39,16 @@ library CircuitBreakerLogic {
         });
     }
 
+    /// @notice Checks whether `postSwapTick` breaches `maxWindowTickDeviation` from `anchorTick` and advances the
+    ///         rolling window checkpoint when `windowSeconds` has elapsed (`S4-L08`).
+    /// @dev Window checkpoint semantics:
+    ///      - On the first swap (`windowStartTimestamp == 0`), `anchorTick` (the window start tick checkpoint) is
+    ///        initialized to `preSwapTick` and `windowStartTimestamp` is set to `block.timestamp`.
+    ///      - Within an active window (`block.timestamp < windowStartTimestamp + windowSeconds`), `anchorTick` remains
+    ///        fixed at the window-start checkpoint so cumulative multi-swap drift cannot exceed `maxWindowTickDeviation`.
+    ///      - Once the window/cooldown expires (`block.timestamp >= windowStartTimestamp + windowSeconds`), the new
+    ///        window checkpoint `anchorTick` advances toward `preSwapTick`, clamped to at most `+/- maxWindowTickDeviation`
+    ///        from the prior `anchorTick` so a single rollover swap cannot jump the reference band arbitrarily.
     function checkAndAdvance(
         mapping(PoolId => CircuitBreakerState) storage states,
         PoolId poolId,
@@ -76,6 +86,8 @@ library CircuitBreakerLogic {
 /// @title CircuitBreakerBlock
 /// @notice Group 2 (Protection & Access) — Expansion Block #19: Rolling price-band circuit breaker (`beforeSwap`, `afterSwap`).
 /// @dev Trust Level: Low (protects Stock-quoted / RWA, Stable-pair, and Treasury-backed pools from flash crashes).
+///      Maintains a rolling window start-tick checkpoint (`anchorTick`) over `windowSeconds` (capped at `MAX_WINDOW_SECONDS = 24h`)
+///      that auto-recovers after window/cooldown expiry by clamping `anchorTick` step-wise by `+/- maxWindowTickDeviation`.
 abstract contract CircuitBreakerBlock is IHookRigBlock {
     mapping(PoolId poolId => CircuitBreakerLogic.CircuitBreakerState state) internal _circuitBreakers;
 

@@ -576,27 +576,27 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         IHookRigBlock.PoolStackConfig memory cfg;
         cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_AUTO_BUYBACK;
         cfg.autoBuyback =
-            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 300, triggerFloorTick: -10, minBuybackReserve: 1 ether});
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 300, triggerFloorTick: 100, minBuybackReserve: 1 ether});
 
         (PoolKey memory key, PoolId poolId) = _initPoolWithStack(cfg);
         _seedFullRangeLiquidity(key, 500_000 ether);
 
-        // Two upward swaps accumulate currency0 ERC-6909 buyback reserve on orchestrator
-        _swapExactIn(alice, key, false, 2000 ether, "");
-        _swapExactIn(alice, key, false, 2000 ether, "");
+        // Two small sells accumulate currency0 ERC-6909 buyback reserve on orchestrator while tick < 100
+        _swapExactIn(alice, key, false, 1000 ether, "");
+        _swapExactIn(alice, key, false, 1000 ether, "");
         uint256 orcBalBefore = poolManager.balanceOf(address(orchestrator), currency0.toId());
         assertGt(orcBalBefore, 0);
+        assertEq(orchestrator.pendingLPDonation(poolId, currency0), 0);
 
-        // Now move tick below -10 and execute a sell (`zeroForOne == false`) while tick <= -10
-        // so the accumulated currency0 ERC-6909 reserve is burned and donated to LPs!
-        // The trigger moves the reserve into the queued LP donation; a swap in a later block pays it out.
-        _swapExactIn(bob, key, true, 25_000 ether, "");
+        // Now a larger sell pushes postSwapTick >= 100 (project token price drops below floor)
+        // so the accumulated currency0 ERC-6909 reserve is queued for LP donation and flushed on a later block's swap!
+        _swapExactIn(bob, key, false, 25_000 ether, "");
         assertGt(orchestrator.pendingLPDonation(poolId, currency0), 0);
         vm.roll(block.number + 1);
-        _swapExactIn(alice, key, false, 1000 ether, "");
+        _swapExactIn(alice, key, true, 1000 ether, "");
 
-        // Verify prior currency0 ERC-6909 buyback reserve was donated: only the royalty claim and the reserve
-        // re-queued by the last swap remain as hook claims.
+        // Verify prior currency0 ERC-6909 buyback reserve was donated and burned: only the royalty claim
+        // and any currency0 pendingLPDonation remain as hook currency0 claims.
         uint256 royaltyClaim0 = orchestrator.poolClaims(poolId, currency0, orchestrator.PROTOCOL_ROYALTY_RECIPIENT());
         assertEq(
             poolManager.balanceOf(address(orchestrator), currency0.toId()),
@@ -900,10 +900,23 @@ contract PresetsAndSecurityVectorsTest is HookRigTestBase {
         vm.prank(alice);
         orchestrator.cancelLimitOrder(key, id2);
 
-        // 2. TWAMM: new orders are disabled (deposits would never swap), so no funds can be escrowed
+        // 2. TWAMM: submit order, stream partial volume, claim output, and cancel remaining unstreamed input
         vm.prank(alice);
-        vm.expectRevert(TWAMMLogic.TWAMMOrdersDisabled.selector);
-        orchestrator.submitTWAMMOrder(key, true, 100 ether, 3600);
+        uint256 twammId = orchestrator.submitTWAMMOrder(key, true, 3600 ether, 3600);
+        vm.warp(block.timestamp + 1800);
+        _swapExactIn(bob, key, true, 100 ether, "");
+
+        uint256 outBefore = token1.balanceOf(alice);
+        vm.prank(alice);
+        (uint256 claimedOut,) = orchestrator.claimTWAMMOrder(key, twammId);
+        assertGt(claimedOut, 0);
+        assertEq(token1.balanceOf(alice) - outBefore, claimedOut);
+
+        uint256 inBefore = token0.balanceOf(alice);
+        vm.prank(alice);
+        uint256 refundedIn = orchestrator.cancelTWAMMOrder(key, twammId);
+        assertEq(refundedIn, 1800 ether);
+        assertEq(token0.balanceOf(alice) - inBefore, 1800 ether);
     }
 
     /// @notice Regression #6: `KingOfThePool` zero-cut buy guard (`#43–#45`) and single-currency pot purity (`#3–#6, #10`).

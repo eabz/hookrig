@@ -202,8 +202,10 @@ library HookPermissionMasks {
                             | BIT_TWAMM
                             | BIT_ORACLE
                             | BIT_CIRCUIT_BREAKER)) != 0;
-        perms.afterSwap =
-            (bitmap
+        // Always enable `afterSwap` whenever `beforeSwap` is enabled so `TransientContext` pre-swap snapshots
+        // stored in `_beforeSwap` are guaranteed to be consumed and cleared in `_afterSwap`.
+        perms.afterSwap = perms.beforeSwap
+            || (bitmap
                         & (AFTER_SWAP_RETURN_DELTA_BLOCKS_MASK
                             | BIT_MEV_PROTECTION
                             | BIT_WALLET_CAP

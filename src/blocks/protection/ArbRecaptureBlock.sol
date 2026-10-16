@@ -35,6 +35,15 @@ library ArbRecaptureLogic {
         st.arbTriggerTickDelta = params.arbTriggerTickDelta > 0 ? params.arbTriggerTickDelta : int24(20);
     }
 
+    /// @notice Computes the arbitrage recapture cut (in bps) from single-swap or cumulative intra-block tick movement.
+    /// @dev `referenceTick` anchoring semantics:
+    ///      - At the start of a new block (`block.number > state.lastUpdatedBlock`), `referenceTick` is anchored to `preSwapTick`.
+    ///      - Within the same block, sub-threshold swaps (`tickMoved <= arbTriggerTickDelta` or `rawCutBps == 0`)
+    ///        deliberately DO NOT advance `referenceTick`. Keeping `referenceTick` anchored across sub-threshold steps
+    ///        prevents an arbitrageur from splitting a large dislocation trade into multiple smaller sub-threshold swaps
+    ///        within the same block to evade arbitrage recapture.
+    ///      - Once a swap triggers a non-zero recapture cut (`rawCutBps > 0`), `referenceTick` advances to `postSwapTick`
+    ///        so subsequent swaps in the same block are only charged on further dislocation beyond `postSwapTick`.
     function computeCutBps(
         mapping(PoolId => ArbRecaptureState) storage states,
         PoolId poolId,
@@ -104,6 +113,8 @@ library ArbRecaptureLogic {
 /// @notice Group 2 (Protection & Access) — Block #6: Captures a share of arbitrage profit and donates it to LPs
 ///         (`beforeSwap`, `afterSwap`, `afterSwapReturnDelta`).
 /// @dev Trust Level: Medium (recaptureShareBps capped at 8000 = 80% of measured dislocation spread; 100% paid to LPs).
+///      `referenceTick` remains anchored across sub-threshold steps within a block so split-trade sequences cannot
+///      walk the reference price to evade recapture.
 abstract contract ArbRecaptureBlock is IHookRigBlock {
     mapping(PoolId poolId => ArbRecaptureLogic.ArbRecaptureState state) internal _arbStates;
 

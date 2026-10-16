@@ -109,21 +109,21 @@ Instead of each block calling `PoolManager.take()` or `donate()` separately (whi
 | Order | Block | Trigger Condition | Cut Formula (Exact-Input Floor Rounded) | Settlement Destination |
 | :--- | :--- | :--- | :--- | :--- |
 | **0** | **`Protocol Royalty`** | Every swap on registered pools | $\Delta_{\text{royalty}} = \lfloor Y_{\text{out}} \times 5 / 10000 \rfloor$ | ERC-6909 claim to `PROTOCOL_ROYALTY_RECIPIENT` (`0x576e...960A`) |
-| **1** | **`Arb recapture`** | Price moved past external/TWAP band | $\Delta_{\text{arb}} = \lfloor \text{arbProfit} \times \text{recaptureBps} / 10000 \rfloor$ | `PoolManager.donate()` to in-range LPs |
-| **2** | **`Buy and sell tax`** | Buy (`buyTaxBps > 0`) or Sell (`sellTaxBps > 0`) | $\Delta_{\text{tax}} = \lfloor Y_{\text{out}} \times \text{taxBps} / 10000 \rfloor$ | ERC-6909 claim to `taxRecipient` |
-| **3** | **`Auto burn`** | Buy swap & `unspecifiedCurrency == projectCurrency` | $\Delta_{\text{burn}} = \lfloor Y_{\text{out}} \times \text{burnBps} / 10000 \rfloor$ | `PoolManager.take()` + `ERC20Burnable.burn()` (or `0xdEaD`) |
+| **1** | **`Arb recapture`** | Price moved past external/TWAP band | $\Delta_{\text{arb}} = \lfloor \text{arbProfit} \times \text{recaptureBps} / 10000 \rfloor$ | Queued in `pendingLPDonation[poolId][currency]` (ERC-6909); flushed via `PoolManager.donate()` in `beforeSwap` on a later block with no LP additions |
+| **2** | **`Buy and sell tax`** | Buy (`buyTaxBps > 0`) or Sell (`sellTaxBps > 0`) | $\Delta_{\text{tax}} = \lfloor Y_{\text{out}} \times \text{taxBps} / 10000 \rfloor$ | ERC-6909 claim to `taxRecipient` (always decay-only after registration; passing `address(0)` to `setBuySellTax` preserves current `taxRecipient`) |
+| **3** | **`Auto burn`** | Buy swap (`exactInput` only; `exactOutput` buys revert `ExactOutputBuyNotSupported`) | $\Delta_{\text{burn}} = \lfloor Y_{\text{out}} \times \text{burnBps} / 10000 \rfloor$ | `PoolManager.take()` + `ERC20Burnable.burn()` (or `0xdEaD`), burning actual received tokens |
 | **4** | **`Fee sharing`** | Every swap | $\Delta_{\text{share}} = \lfloor Y_{\text{out}} \times \text{shareBps} / 10000 \rfloor$ | ERC-6909 claim split to primary/secondary recipients |
-| **5** | **`LP rewards`** | Buy swap (`isBuy == true` & `L > 0`) | $\Delta_{\text{lp}} = \lfloor Y_{\text{out}} \times \text{lpRewardBps} / 10000 \rfloor$ | `PoolManager.donate()` to active LPs |
-| **6** | **`King of the Pool`** | Buy swap & `unspecifiedCurrency == projectCurrency` | $\Delta_{\text{king}} = \lfloor Y_{\text{out}} \times \text{potBps} / 10000 \rfloor$ | ERC-6909 claim added to `_kingStates[poolId].pot` |
-| **7** | **`Referral split`** | Every swap (`referralBps > 0`) | $\Delta_{\text{ref}} = \lfloor Y_{\text{out}} \times \text{referralBps} / 10000 \rfloor$ | ERC-6909 claim to bound referrer (or `defaultRecipient`) |
-| **8** | **`Auto buyback`** | Every swap (`buybackBps > 0`) | $\Delta_{\text{bb}} = \lfloor Y_{\text{out}} \times \text{buybackBps} / 10000 \rfloor$ | Accumulated as ERC-6909 reserve; donated to LPs below `triggerFloorTick` |
+| **5** | **`LP rewards`** | Buy swap (`isBuy == true`) | $\Delta_{\text{lp}} = \lfloor Y_{\text{out}} \times \text{lpRewardBps} / 10000 \rfloor$ | Queued in `pendingLPDonation[poolId][currency]` (ERC-6909); flushed via `PoolManager.donate()` in `beforeSwap` on a later block with no LP additions |
+| **6** | **`King of the Pool`** | Buy swap (`exactInput` only; `exactOutput` buys revert `ExactOutputBuyNotSupported`) | $\Delta_{\text{king}} = \lfloor Y_{\text{out}} \times \text{potBps} / 10000 \rfloor$ | ERC-6909 claim added to `_kingStates[poolId].currentPotAmount` (untrusted routers contribute to pot without taking the crown) |
+| **7** | **`Referral split`** | Every swap (`referralBps > 0`, attributed trader only) | $\Delta_{\text{ref}} = \lfloor Y_{\text{out}} \times \text{referralBps} / 10000 \rfloor$ | ERC-6909 claim to bound referrer |
+| **8** | **`Auto buyback`** | Every swap (`buybackBps > 0`) | $\Delta_{\text{bb}} = \lfloor Y_{\text{out}} \times \text{buybackBps} / 10000 \rfloor$ | Accumulated as ERC-6909 reserve; queued into `pendingLPDonation` when project token price drops to/beyond `triggerFloorTick` (`postSwapTick <= triggerFloorTick` when `token0` is project token, `postSwapTick >= triggerFloorTick` when `token1` is project token) |
 
 #### Aggregate Cap & Conservation Check
 $$\Delta_{\text{total}} = \Delta_{\text{royalty}} + \Delta_{\text{arb}} + \Delta_{\text{tax}} + \Delta_{\text{burn}} + \Delta_{\text{share}} + \Delta_{\text{lp}} + \Delta_{\text{king}} + \Delta_{\text{ref}} + \Delta_{\text{bb}} \le \lfloor Y_{\text{out}} \times \text{MAX\_AGGREGATE\_AFTER\_SWAP\_BPS} / 10000 \rfloor$$
 
 - Every slice is resolved with `PoolManager` (via batched ERC-6909 `mint`, `burn`, `donate`, or `take`) so that the Hook's net delta with `PoolManager` at the end of `afterSwap` is **strictly zero** after returning `toInt128(Delta_total)`.
-- Next, **`Swap rewards`** records swap points on the post-cut net volume (`grossUnspecifiedAmount - totalCutAmount`; storage/event only, zero delta).
-- Finally, **`Limit orders`** checks if `preSwapTick -> postSwapTick` crossed any initialized limit order ticks and fills them.
+- Next, **`Swap rewards`** records swap points on the post-cut net project token volume (on exact-input buys: `grossUnspecifiedAmount - totalCutAmount`; on exact-output sells: `grossUnspecifiedAmount + totalCutAmount`; storage/event only, zero delta).
+- Finally, **`Limit orders`** traverses up to `MAX_TICK_FILLS_PER_SWAP = 512` aligned ticks between `preSwapTick` and `postSwapTick` (`zeroForOne == true` triggers on downward tick crossings `t <= prevTick`; `zeroForOne == false` triggers on upward tick crossings `t >= prevTick`), marking epoch-indexed buckets as filled for claim via `claimLimitOrder(key, orderId, minAmountOut)`.
 
 ---
 

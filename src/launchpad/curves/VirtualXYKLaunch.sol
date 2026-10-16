@@ -50,6 +50,7 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
     error ZeroAmount();
     error WalletCapExceededOnCurve(address buyer, uint256 newBalance, uint256 maxAllowed);
     error OnlyPoolManagerUnlock();
+    error UnsupportedFeeOnTransferQuoteToken();
 
     constructor(IPoolManager _poolManager, IHookRigOrchestrator _hookOrchestrator, address _factory) {
         poolManager = _poolManager;
@@ -105,6 +106,9 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
             newVirtualQuote = Math.mulDiv(invariantK, 1, newVirtualToken, Math.Rounding.Ceil);
             quoteUsed = newVirtualQuote > virtualQuoteReserve ? newVirtualQuote - virtualQuoteReserve : 0;
         }
+        if (tokensOut == 0 && realQuoteRaised + quoteUsed < curveConfig.graduationQuoteTarget) {
+            revert ZeroAmount();
+        }
         if (tokensOut < minTokensOut) {
             revert SlippageExceeded(tokensOut, minTokensOut);
         }
@@ -114,7 +118,14 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
             require(msg.value >= quoteUsed, "Insufficient ETH");
         } else {
             require(msg.value == 0, "Unexpected ETH");
-            IERC20(Currency.unwrap(quoteCurrency)).safeTransferFrom(msg.sender, address(this), quoteUsed);
+            if (quoteUsed > 0) {
+                IERC20 quoteToken = IERC20(Currency.unwrap(quoteCurrency));
+                uint256 balBefore = quoteToken.balanceOf(address(this));
+                quoteToken.safeTransferFrom(msg.sender, address(this), quoteUsed);
+                if (quoteToken.balanceOf(address(this)) - balBefore != quoteUsed) {
+                    revert UnsupportedFeeOnTransferQuoteToken();
+                }
+            }
         }
 
         virtualQuoteReserve = newVirtualQuote;
@@ -163,6 +174,9 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         uint256 newVirtualToken = virtualTokenReserve + tokenAmountIn;
         uint256 newVirtualQuote = Math.mulDiv(invariantK, 1, newVirtualToken, Math.Rounding.Ceil);
         quoteOut = virtualQuoteReserve > newVirtualQuote ? virtualQuoteReserve - newVirtualQuote : 0;
+        if (quoteOut > realQuoteRaised) {
+            quoteOut = realQuoteRaised;
+        }
         if (quoteOut < minQuoteOut) {
             revert SlippageExceeded(quoteOut, minQuoteOut);
         }

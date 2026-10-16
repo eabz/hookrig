@@ -200,9 +200,13 @@ contract HookRigOrchestrator is
             revert PoolNotConfigured(poolId);
         }
 
-        if (meta.isLaunchpadPool && sender != meta.authorizedCurve && sender != launchpadFactory) {
-            revert UnauthorizedPoolInitializer(sender);
-        }
+        AccessControlLogic.verifyInitializer(
+            sender,
+            meta.poolAdmin,
+            meta.isLaunchpadPool ? launchpadFactory : owner(),
+            meta.isLaunchpadPool,
+            meta.authorizedCurve
+        );
 
         if ((meta.enabledBlocksBitmap & HookPermissionMasks.BIT_TWAMM) != 0) {
             _validateTWAMMBeforeInitialize(key.tickSpacing);
@@ -219,9 +223,13 @@ contract HookRigOrchestrator is
     {
         PoolId poolId = key.toId();
         PoolRuntimeMeta storage meta = _poolMeta[poolId];
-        if (meta.isLaunchpadPool && sender != meta.authorizedCurve && sender != launchpadFactory) {
-            revert UnauthorizedPoolInitializer(sender);
-        }
+        AccessControlLogic.verifyInitializer(
+            sender,
+            meta.poolAdmin,
+            meta.isLaunchpadPool ? launchpadFactory : owner(),
+            meta.isLaunchpadPool,
+            meta.authorizedCurve
+        );
         uint32 bitmap = meta.enabledBlocksBitmap;
 
         AntiSnipeLogic.resetGraduationClocks(
@@ -313,6 +321,9 @@ contract HookRigOrchestrator is
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         PoolId poolId = key.toId();
+        if (TransientContext.isInternalHookExecution(poolId)) {
+            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        }
         uint32 bitmap = _poolMeta[poolId].enabledBlocksBitmap;
         if ((bitmap & HookPermissionMasks.BIT_ACCESS_CONTROL) != 0) {
             _verifyAccess(poolId, _resolveUser(sender, hookData), hookData, false);
@@ -324,13 +335,14 @@ contract HookRigOrchestrator is
             );
         }
 
+        if ((bitmap & HookPermissionMasks.BIT_TWAMM) != 0) {
+            _executePendingTWAMMOrders(key, poolId);
+        }
+
         (uint160 preSqrtPriceX96, int24 preTick,,) = StateLibrary.getSlot0(poolManager, poolId);
 
         if ((bitmap & HookPermissionMasks.BIT_ORACLE) != 0) {
             _updateOracleCheckpoint(poolId, preTick);
-        }
-        if ((bitmap & HookPermissionMasks.BIT_TWAMM) != 0) {
-            _executePendingTWAMMOrders(poolId);
         }
 
         TransientContext.storePreSwapSnapshot(poolId, preSqrtPriceX96, preTick);
@@ -348,6 +360,9 @@ contract HookRigOrchestrator is
         bytes calldata hookData
     ) internal virtual override returns (bytes4, int128) {
         PoolId poolId = key.toId();
+        if (TransientContext.isInternalHookExecution(poolId)) {
+            return (IHooks.afterSwap.selector, 0);
+        }
         int128 hookDeltaUnspecified =
             _runAfterSwapPipeline(poolId, sender, _resolveUser(sender, hookData), key, params, swapDelta);
         return (IHooks.afterSwap.selector, hookDeltaUnspecified);
@@ -365,6 +380,7 @@ contract HookRigOrchestrator is
         PoolTokenDir.SwapContext memory ctx =
             PoolTokenDir.resolveSwapContext(key, params, swapDelta, _poolMeta[poolId].isToken0ProjectToken);
         ctx.trader = trader;
+        bool traderIsSender = trader == sender;
         {
             TransientContext.PreSwapSnapshot memory snap = TransientContext.loadAndClearPreSwapSnapshot(poolId);
             (, int24 postTick,,) = StateLibrary.getSlot0(poolManager, poolId);
@@ -382,7 +398,7 @@ contract HookRigOrchestrator is
 
         uint256 totalCutAmount;
         (hookDeltaUnspecified, totalCutAmount) =
-            _executeAfterSwapDeltaWaterfall(poolClaims, poolManager, key, poolId, bitmap, ctx);
+            _executeAfterSwapDeltaWaterfall(poolClaims, poolManager, key, poolId, bitmap, ctx, traderIsSender);
 
         if ((bitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0) {
             _enforceWalletCapAfterSwap(
@@ -393,7 +409,8 @@ contract HookRigOrchestrator is
                 ctx.isExactInput,
                 ctx.grossUnspecifiedAmount,
                 ctx.settledSpecifiedAmount,
-                totalCutAmount
+                totalCutAmount,
+                traderIsSender
             );
         }
 
@@ -401,13 +418,17 @@ contract HookRigOrchestrator is
             uint256 projectTokensSold =
                 ctx.isExactInput ? ctx.settledSpecifiedAmount : (ctx.grossUnspecifiedAmount + totalCutAmount);
             _enforceVestingSellCap(
-                poolManager, poolId, ctx.projectCurrency, ctx.trader, ctx.trader == sender, projectTokensSold
+                poolManager, poolId, ctx.projectCurrency, ctx.trader, traderIsSender, projectTokensSold
             );
         }
 
         if ((bitmap & HookPermissionMasks.BIT_SWAP_REWARDS) != 0) {
             uint256 netRewardVolume = ctx.unspecifiedCurrency == ctx.projectCurrency
-                ? (ctx.grossUnspecifiedAmount > totalCutAmount ? ctx.grossUnspecifiedAmount - totalCutAmount : 0)
+                ? (ctx.isExactInput
+                        ? (ctx.grossUnspecifiedAmount > totalCutAmount
+                                ? ctx.grossUnspecifiedAmount - totalCutAmount
+                                : 0)
+                        : ctx.grossUnspecifiedAmount)
                 : ctx.settledSpecifiedAmount;
             _accrueSwapRewards(poolId, ctx.trader, netRewardVolume);
         }

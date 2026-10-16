@@ -422,9 +422,10 @@ contract BlocksUnitTest is HookRigTestBase {
         vm.expectRevert(abi.encodeWithSelector(BuySellTaxLogic.TaxExceedsHardCap.selector, 1200, 200));
         harness.updateTax(poolId, 1200, 200, treasury);
 
-        // Updating with zero recipient when buyTax > 0 reverts
-        vm.expectRevert(BuySellTaxLogic.InvalidTaxRecipient.selector);
-        harness.updateTax(poolId, 100, 100, address(0));
+        // Updating with zero recipient preserves existing recipient (S2-F55 / TODO-29)
+        harness.updateTax(poolId, 200, 200, address(0));
+        (, address preservedRec) = harness.getTax(poolId, true);
+        assertEq(preservedRec, treasury);
 
         // Decreasing tax and rotating recipient succeeds
         harness.updateTax(poolId, 100, 150, charity);
@@ -629,16 +630,18 @@ contract BlocksUnitTest is HookRigTestBase {
         IHookRigBlock.PoolStackConfig memory cfg;
         cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_AUTO_BUYBACK;
         cfg.autoBuyback =
-            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 300, triggerFloorTick: -10, minBuybackReserve: 1 ether});
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 300, triggerFloorTick: 50, minBuybackReserve: 1 ether});
 
         (PoolKey memory key, PoolId poolId) = _initPoolWithStack(cfg);
         _seedFullRangeLiquidity(key, 500_000 ether);
 
-        // First buy moves tick up (> triggerFloorTick) -> accumulates reserve
-        _swapExactIn(alice, key, false, 5000 ether, "");
+        // Small sell moves tick slightly up (< triggerFloorTick 50) -> accumulates quote reserve without triggering
+        _swapExactIn(alice, key, false, 1000 ether, "");
+        assertEq(orchestrator.pendingLPDonation(poolId, currency0), 0);
 
-        // Next swap pushes tick down below -10 -> triggers floor buyback donation to LPs
-        _swapExactIn(bob, key, true, 15_000 ether, "");
+        // Larger sell pushes tick >= 50 (price drops below floor) -> triggers floor buyback donation to LPs
+        _swapExactIn(bob, key, false, 20_000 ether, "");
+        assertGt(orchestrator.pendingLPDonation(poolId, currency0), 0);
         _flushLPDonations(key);
         assertGt(orchestrator.totalLPRewardsDonated(poolId), 0);
     }
@@ -694,14 +697,32 @@ contract BlocksUnitTest is HookRigTestBase {
         (PoolKey memory key,) = _initPoolWithStack(cfg);
         _seedFullRangeLiquidity(key, 1_000_000 ether);
 
-        // TWAMM never swaps deposits, so new orders are rejected instead of escrowing funds that cannot pay out
+        // Sub-minimum TWAMM order (< 1000 wei) reverts
         vm.prank(alice);
-        vm.expectRevert(TWAMMLogic.TWAMMOrdersDisabled.selector);
-        orchestrator.submitTWAMMOrder(key, true, 3600 ether, 3600);
+        vm.expectRevert(TWAMMLogic.InvalidTWAMMInterval.selector);
+        orchestrator.submitTWAMMOrder(key, true, 500, 100);
 
-        // Swaps on a TWAMM pool keep working
+        // Alice submits a 3600 ether TWAMM order over 3600s (1 ether/sec)
+        vm.prank(alice);
+        uint256 orderId = orchestrator.submitTWAMMOrder(key, true, 3600 ether, 3600);
+        assertEq(orderId, 1);
+
+        // Advance 600s; Carol's swap triggers virtual TWAMM swap settlement for the first 600 ether
         vm.warp(block.timestamp + 600);
         _swapExactIn(carol, key, true, 100 ether, "");
+
+        // Alice claims streamed output so far, then cancels the rest of the order
+        uint256 aliceOutBefore = token1.balanceOf(alice);
+        vm.prank(alice);
+        (uint256 claimedOut,) = orchestrator.claimTWAMMOrder(key, orderId);
+        assertGt(claimedOut, 0);
+        assertEq(token1.balanceOf(alice) - aliceOutBefore, claimedOut);
+
+        uint256 aliceInBefore = token0.balanceOf(alice);
+        vm.prank(alice);
+        uint256 refundedIn = orchestrator.cancelTWAMMOrder(key, orderId);
+        assertEq(refundedIn, 3000 ether);
+        assertEq(token0.balanceOf(alice) - aliceInBefore, 3000 ether);
     }
 
     function test_Block17_Oracle_TruncatedTWAPCheckpointing() public {

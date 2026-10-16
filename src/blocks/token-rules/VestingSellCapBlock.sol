@@ -11,6 +11,7 @@ import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
 
 library VestingSellCapLogic {
     uint16 internal constant MIN_DAILY_SELL_BPS = 50; // Minimum 0.50% per day (anti-honeypot)
+    uint16 internal constant MAX_DAILY_SELL_BPS = 5000; // Maximum 50.00% per day
 
     struct WalletSellEpoch {
         uint64 epochIndex;
@@ -26,10 +27,7 @@ library VestingSellCapLogic {
         PoolId poolId,
         IHookRigBlock.VestingSellCapParams calldata params
     ) external {
-        if (
-            params.maxDailySellBps > 0
-                && (params.maxDailySellBps < MIN_DAILY_SELL_BPS || params.maxDailySellBps > 10_000)
-        ) {
+        if (params.maxDailySellBps < MIN_DAILY_SELL_BPS || params.maxDailySellBps > MAX_DAILY_SELL_BPS) {
             revert InvalidDailySellCapBps(params.maxDailySellBps);
         }
         configs[poolId] = params;
@@ -51,8 +49,8 @@ library VestingSellCapLogic {
         if (maxBps == 0 || maxBps >= 10_000 || tokensSold == 0 || projectCurrency.isAddressZero()) return;
 
         uint256 preSellBal = _preSellBalance(manager, projectCurrency, seller, sellerIsSwapper, tokensSold);
-        // The resolved seller holds nothing the hook can attribute (an untrusted router that settles after the
-        // swap). Skip rather than brick the sell: a per-wallet cap cannot bind an intermediary.
+        // The resolved seller holds nothing the hook can attribute (an untrusted router that settles before or after
+        // the swap). Skip rather than brick the sell: a per-wallet cap cannot bind a stateless intermediary.
         if (preSellBal == 0) return;
 
         uint64 currentEpoch = uint64(block.timestamp / 1 days);
@@ -94,7 +92,13 @@ library VestingSellCapLogic {
     ) private view returns (uint256) {
         int256 bal = int256(IERC20(Currency.unwrap(projectCurrency)).balanceOf(seller));
         if (sellerIsSwapper) {
-            bal += TransientStateLibrary.currencyDelta(manager, seller, projectCurrency);
+            int256 delta = TransientStateLibrary.currencyDelta(manager, seller, projectCurrency);
+            // A stateless pass-through router holds 0 tokens after settling and has at most `+tokensSold` pre-settled
+            // in PoolManager (which PoolManager will net against the swap right after `afterSwap`).
+            if (bal == 0 && delta <= int256(tokensSold)) {
+                return 0;
+            }
+            bal += delta;
         } else if (bal < int256(tokensSold)) {
             // A trusted router pulled the input from the user before the swap.
             bal += int256(tokensSold);

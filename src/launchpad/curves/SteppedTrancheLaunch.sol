@@ -27,6 +27,8 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
     using SafeERC20 for IERC20;
     using CurrencySettler for Currency;
 
+    uint32 public constant MAX_ANTI_SNIPE_BLOCKS = 50_400;
+
     IPoolManager public immutable poolManager;
     IHookRigOrchestrator public immutable hookOrchestrator;
     address public immutable factory;
@@ -45,13 +47,18 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
     uint256 public totalSurchargeCollected;
     /// @notice Tranche price paid by the latest curve buy; graduation opens the pool at this price.
     uint256 public lastFillPriceQ96;
+    mapping(address => uint256) public buyerSurcharges;
+    mapping(address => uint256) public cumulativeTokensBought;
+    mapping(address => uint256) public cumulativeTokensSoldByBuyer;
 
     error AlreadyInitialized();
     error CurveNotActive();
     error ZeroAmount();
+    error InvalidTrancheConfiguration();
     error SlippageExceeded(uint256 actual, uint256 minimumRequired);
     error WalletCapExceededOnTranche(address buyer, uint256 newBalance, uint256 maxAllowed);
     error OnlyPoolManagerUnlock();
+    error UnsupportedFeeOnTransferQuoteToken();
 
     constructor(IPoolManager _poolManager, IHookRigOrchestrator _hookOrchestrator, address _factory) {
         poolManager = _poolManager;
@@ -65,6 +72,9 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         external
     {
         if (launchState != LaunchState.Uninitialized || msg.sender != factory) revert AlreadyInitialized();
+        if (_config.antiSnipeBlocks > MAX_ANTI_SNIPE_BLOCKS) {
+            revert InvalidTrancheConfiguration();
+        }
         if (
             _config.numTranches == 0 || _config.curveTokenAllocation == 0 || _config.graduationQuoteTarget == 0
                 || _config.basePriceQ96 == 0 || _config.antiSnipeSurchargeBps >= 10_000
@@ -137,6 +147,9 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
                 netQuoteForTokens = quoteUsed > surcharge ? quoteUsed - surcharge : 0;
             }
         }
+        if (tokensOut == 0 && realQuoteRaised + netQuoteForTokens < trancheConfig.graduationQuoteTarget) {
+            revert ZeroAmount();
+        }
         if (tokensOut < minTokensOut) {
             revert SlippageExceeded(tokensOut, minTokensOut);
         }
@@ -145,12 +158,21 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
             require(msg.value >= quoteUsed, "Insufficient ETH");
         } else {
             require(msg.value == 0, "Unexpected ETH");
-            IERC20(Currency.unwrap(quoteCurrency)).safeTransferFrom(msg.sender, address(this), quoteUsed);
+            if (quoteUsed > 0) {
+                IERC20 quoteToken = IERC20(Currency.unwrap(quoteCurrency));
+                uint256 balBefore = quoteToken.balanceOf(address(this));
+                quoteToken.safeTransferFrom(msg.sender, address(this), quoteUsed);
+                if (quoteToken.balanceOf(address(this)) - balBefore != quoteUsed) {
+                    revert UnsupportedFeeOnTransferQuoteToken();
+                }
+            }
         }
 
         realQuoteRaised += netQuoteForTokens;
         totalSurchargeCollected += surcharge;
         curveTokensSold += tokensOut;
+        buyerSurcharges[msg.sender] += surcharge;
+        cumulativeTokensBought[msg.sender] += tokensOut;
 
         if (trancheConfig.maxWalletBps > 0) {
             uint256 supply = IERC20(projectToken).totalSupply();
@@ -194,6 +216,15 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
             Math.mulDiv(tokenAmountIn, uint256(trancheConfig.basePriceQ96), uint256(1) << 96, Math.Rounding.Floor);
         uint256 proRataCap = Math.mulDiv(realQuoteRaised, tokenAmountIn, curveTokensSold, Math.Rounding.Floor);
         quoteOut = baseRedemption < proRataCap ? baseRedemption : proRataCap;
+
+        uint256 bought = cumulativeTokensBought[msg.sender];
+        uint256 alreadySold = cumulativeTokensSoldByBuyer[msg.sender];
+        if (bought > alreadySold) {
+            uint256 remBought = bought - alreadySold;
+            uint256 credit = tokenAmountIn > remBought ? remBought : tokenAmountIn;
+            cumulativeTokensSoldByBuyer[msg.sender] = alreadySold + credit;
+        }
+
         if (quoteOut < minQuoteOut) {
             revert SlippageExceeded(quoteOut, minQuoteOut);
         }
@@ -206,6 +237,32 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         }
 
         emit CurveSell(msg.sender, tokenAmountIn, quoteOut, realQuoteRaised);
+    }
+
+    /// @notice Allows buyers who sold back into a stalled curve after `antiSnipeBlocks` to withdraw their unlocked
+    ///         pro-rata anti-snipe surcharge refund (`S3-F64`).
+    function claimStalledSurchargeRefund(address recipient) external nonReentrant returns (uint256 refundAmount) {
+        if (launchState != LaunchState.ActiveBonding) revert CurveNotActive();
+        if (block.number <= uint256(launchCreationBlock) + uint256(trancheConfig.antiSnipeBlocks)) {
+            revert CurveNotActive();
+        }
+        uint256 bought = cumulativeTokensBought[msg.sender];
+        uint256 sold = cumulativeTokensSoldByBuyer[msg.sender];
+        uint256 surch = buyerSurcharges[msg.sender];
+        if (bought == 0 || sold == 0 || surch == 0) revert ZeroAmount();
+
+        refundAmount = Math.mulDiv(surch, sold, bought, Math.Rounding.Floor);
+        if (refundAmount > surch) refundAmount = surch;
+        if (refundAmount > totalSurchargeCollected) refundAmount = totalSurchargeCollected;
+        if (refundAmount == 0) revert ZeroAmount();
+
+        buyerSurcharges[msg.sender] = surch - refundAmount;
+        totalSurchargeCollected -= refundAmount;
+        cumulativeTokensBought[msg.sender] = bought - sold;
+        cumulativeTokensSoldByBuyer[msg.sender] = 0;
+
+        if (recipient == address(0)) recipient = msg.sender;
+        quoteCurrency.transfer(recipient, refundAmount);
     }
 
     function _graduateToV4() internal {
@@ -225,6 +282,7 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         uint256 continuousLpTokens = Math.mulDiv(quoteToSeed, uint256(1) << 96, finalPriceQ96, Math.Rounding.Floor);
         uint256 availableTokens = IERC20(projectToken).balanceOf(address(this));
         if (continuousLpTokens > availableTokens) {
+            quoteToSeed = Math.mulDiv(quoteToSeed, availableTokens, continuousLpTokens, Math.Rounding.Floor);
             continuousLpTokens = availableTokens;
         }
         if (continuousLpTokens == 0) {

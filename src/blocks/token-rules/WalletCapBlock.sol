@@ -21,6 +21,7 @@ library WalletCapLogic {
     error InvalidWalletCapBps(uint16 requestedBps);
     error InvalidWalletCapSunsetBlocks(uint32 sunsetBlocks);
     error WalletCapExceeded(address buyer, uint256 resultingBalance, uint256 maxAllowedBalance);
+    error UntrustedRouterNotAllowedForWalletCap(address router);
 
     function init(
         mapping(PoolId => WalletCapState) storage states,
@@ -45,6 +46,17 @@ library WalletCapLogic {
         address recipient,
         uint256 netProjectTokensBought
     ) public {
+        enforceAfterBuy(states, poolId, projectCurrency, recipient, netProjectTokensBought, false);
+    }
+
+    function enforceAfterBuy(
+        mapping(PoolId => WalletCapState) storage states,
+        PoolId poolId,
+        Currency projectCurrency,
+        address recipient,
+        uint256 netProjectTokensBought,
+        bool traderIsSender
+    ) public {
         WalletCapState storage state = states[poolId];
         uint16 maxBps = state.maxWalletBps;
         if (maxBps == 0 || maxBps >= 10_000) return;
@@ -52,6 +64,10 @@ library WalletCapLogic {
         uint32 sunset = state.sunsetBlocks;
         if (sunset > 0 && block.number >= uint256(state.startBlock) + uint256(sunset)) {
             return;
+        }
+
+        if (traderIsSender) {
+            revert UntrustedRouterNotAllowedForWalletCap(recipient);
         }
 
         if (projectCurrency.isAddressZero()) return;
@@ -82,6 +98,32 @@ library WalletCapLogic {
         uint256 settledSpecifiedAmount,
         uint256 totalCutAmount
     ) external {
+        enforceAfterSwap(
+            states,
+            poolId,
+            projectCurrency,
+            trader,
+            isBuy,
+            isExactInput,
+            grossUnspecifiedAmount,
+            settledSpecifiedAmount,
+            totalCutAmount,
+            false
+        );
+    }
+
+    function enforceAfterSwap(
+        mapping(PoolId => WalletCapState) storage states,
+        PoolId poolId,
+        Currency projectCurrency,
+        address trader,
+        bool isBuy,
+        bool isExactInput,
+        uint256 grossUnspecifiedAmount,
+        uint256 settledSpecifiedAmount,
+        uint256 totalCutAmount,
+        bool traderIsSender
+    ) public {
         if (isBuy) {
             uint256 netTokensToBuyer = 0;
             if (isExactInput && grossUnspecifiedAmount > totalCutAmount) {
@@ -89,7 +131,7 @@ library WalletCapLogic {
             } else if (!isExactInput) {
                 netTokensToBuyer = settledSpecifiedAmount;
             }
-            enforceAfterBuy(states, poolId, projectCurrency, trader, netTokensToBuyer);
+            enforceAfterBuy(states, poolId, projectCurrency, trader, netTokensToBuyer, traderIsSender);
         } else {
             uint256 sold = isExactInput ? settledSpecifiedAmount : (grossUnspecifiedAmount + totalCutAmount);
             address token = Currency.unwrap(projectCurrency);
@@ -138,7 +180,33 @@ abstract contract WalletCapBlock is IHookRigBlock {
             isExactInput,
             grossUnspecifiedAmount,
             settledSpecifiedAmount,
-            totalCutAmount
+            totalCutAmount,
+            false
+        );
+    }
+
+    function _enforceWalletCapAfterSwap(
+        PoolId poolId,
+        Currency projectCurrency,
+        address trader,
+        bool isBuy,
+        bool isExactInput,
+        uint256 grossUnspecifiedAmount,
+        uint256 settledSpecifiedAmount,
+        uint256 totalCutAmount,
+        bool traderIsSender
+    ) internal {
+        WalletCapLogic.enforceAfterSwap(
+            _walletCapStates,
+            poolId,
+            projectCurrency,
+            trader,
+            isBuy,
+            isExactInput,
+            grossUnspecifiedAmount,
+            settledSpecifiedAmount,
+            totalCutAmount,
+            traderIsSender
         );
     }
 }

@@ -79,8 +79,10 @@ library AutoBuybackLogic {
         }
 
         bool isToken0ProjectToken = Currency.unwrap(projectCurrency) < Currency.unwrap(quoteCurrency);
+        // When token0 is the project token, its price in token1 is 1.0001^tick (a price drop moves tick down).
+        // When token1 is the project token, its price in token0 is 1.0001^(-tick) (a price drop moves tick up).
         bool isBelowFloor =
-            isToken0ProjectToken ? (postSwapTick >= st.triggerFloorTick) : (postSwapTick <= st.triggerFloorTick);
+            isToken0ProjectToken ? (postSwapTick <= st.triggerFloorTick) : (postSwapTick >= st.triggerFloorTick);
         uint256 quoteReserve = st.reserveByCurrency[quoteCurrency];
 
         if (st.minBuybackReserve > 0 && quoteReserve >= st.minBuybackReserve && isBelowFloor) {

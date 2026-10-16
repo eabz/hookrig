@@ -132,7 +132,7 @@ Launch tokens via [`LaunchpadFactory`](./src/launchpad/LaunchpadFactory.sol) wit
 | [**04. Security Mechanics & Caveats**](./docs/04-security-mechanics-and-caveats.md) | Real-world v4 exploit defenses (Cork Protocol, Bunni V2), rounding laws, hard caps, and Medusa verification standards. |
 | [**05. Token Launchpad Mechanics**](./docs/05-token-launch-mechanics.md) | Bonding math, `Create2` address sorting, and graduation security invariants. |
 | [**06. Attack Vectors & Code Fixes**](./docs/06-attack-vectors-and-fixes.md) | Complete catalog of all 14 attack vectors, 6 anti-freeze guarantees, implemented Hoodi integration enhancements, and Tier 3 mutex rules (`2,843` valid combinations). |
-| [**07. Roadmap & Post-Review TODOs**](./docs/07-roadmap-and-todo.md) | Completed `src/` audit remediation & fuzzing ledger (`TODO-01`–`TODO-12`), plus live Hoodi broadcast checklist (`TODO-09`). |
+| [**07. Roadmap & Post-Review TODOs**](./docs/07-roadmap-and-todo.md) | Completed `src/` audit remediation & fuzzing ledger (`TODO-01`–`TODO-29`), plus live Hoodi broadcast checklist (`TODO-09`). |
 | [**PROPERTIES.md**](./PROPERTIES.md) | Canonical 56-property invariant specification (`26 Global GL-01..GL-26 + 30 Specific SP-01..SP-30`) verified via Medusa and Foundry. |
 
 ---

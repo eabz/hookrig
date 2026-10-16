@@ -1,19 +1,108 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {CurrencySettler} from "@openzeppelin/uniswap-hooks/utils/CurrencySettler.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
+import {TransientContext} from "../../libraries/TransientContext.sol";
+import {IHasPoolManager} from "./LimitOrdersBlock.sol";
+
+/// @notice Executes out-of-unlock TWAMM virtual order swaps against `PoolManager` and returns the settled input and
+///         output amounts to the hook.
+contract TWAMMSwapExecutor is IUnlockCallback {
+    using CurrencySettler for Currency;
+
+    IPoolManager public immutable poolManager;
+    address public immutable hook;
+
+    error OnlyHookCaller(address caller);
+
+    struct SwapCallbackData {
+        PoolKey key;
+        bool zeroForOne;
+        uint256 inputAmount;
+    }
+
+    constructor(IPoolManager _poolManager, address _hook) {
+        poolManager = _poolManager;
+        hook = _hook;
+    }
+
+    receive() external payable {}
+
+    function executeVirtualSwap(PoolKey calldata key, bool zeroForOne, uint256 inputAmount)
+        external
+        payable
+        returns (uint256 actualIn, uint256 actualOut)
+    {
+        if (msg.sender != hook) revert OnlyHookCaller(msg.sender);
+        bytes memory res = poolManager.unlock(
+            abi.encode(SwapCallbackData({key: key, zeroForOne: zeroForOne, inputAmount: inputAmount}))
+        );
+        (actualIn, actualOut) = abi.decode(res, (uint256, uint256));
+    }
+
+    function unlockCallback(bytes calldata rawData) external override returns (bytes memory) {
+        require(msg.sender == address(poolManager), "Only PoolManager");
+        SwapCallbackData memory cb = abi.decode(rawData, (SwapCallbackData));
+
+        BalanceDelta delta = poolManager.swap(
+            cb.key,
+            SwapParams({
+                zeroForOne: cb.zeroForOne,
+                amountSpecified: -int256(cb.inputAmount),
+                sqrtPriceLimitX96: cb.zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            ""
+        );
+
+        if (delta.amount0() < 0) {
+            cb.key.currency0.settle(poolManager, address(this), uint256(uint128(-delta.amount0())), false);
+        } else if (delta.amount0() > 0) {
+            cb.key.currency0.take(poolManager, hook, uint256(uint128(delta.amount0())), false);
+        }
+
+        if (delta.amount1() < 0) {
+            cb.key.currency1.settle(poolManager, address(this), uint256(uint128(-delta.amount1())), false);
+        } else if (delta.amount1() > 0) {
+            cb.key.currency1.take(poolManager, hook, uint256(uint128(delta.amount1())), false);
+        }
+
+        int128 inDelta = cb.zeroForOne ? delta.amount0() : delta.amount1();
+        int128 outDelta = cb.zeroForOne ? delta.amount1() : delta.amount0();
+        uint256 actualIn = inDelta < 0 ? uint256(uint128(-inDelta)) : 0;
+        uint256 actualOut = outDelta > 0 ? uint256(uint128(outDelta)) : 0;
+
+        Currency inputCurrency = cb.zeroForOne ? cb.key.currency0 : cb.key.currency1;
+        uint256 leftover = inputCurrency.isAddressZero()
+            ? address(this).balance
+            : IERC20(Currency.unwrap(inputCurrency)).balanceOf(address(this));
+        if (leftover > 0) {
+            inputCurrency.transfer(hook, leftover);
+        }
+
+        return abi.encode(actualIn, actualOut);
+    }
+}
 
 library TWAMMLogic {
     using PoolIdLibrary for PoolKey;
     using SafeERC20 for IERC20;
+    using CurrencySettler for Currency;
 
     uint64 internal constant MAX_TWAMM_DURATION = 365 days;
+    uint128 internal constant MIN_TWAMM_ORDER_AMOUNT = 1000;
     uint256 internal constant MAX_ACTIVE_TWAMM_ORDERS = 256;
 
     struct TWAMMState {
@@ -33,6 +122,11 @@ library TWAMMLogic {
         uint64 startTimestamp;
         uint64 expirationTimestamp;
         bool cancelled;
+        bool rateRemoved;
+        uint128 streamedAmount;
+        uint128 swappedInputAmount;
+        uint128 refundedInputAmount;
+        uint256 claimableOutput;
     }
 
     event TWAMMOrderSubmitted(
@@ -44,6 +138,9 @@ library TWAMMLogic {
         uint64 expirationTimestamp
     );
     event TWAMMOrderCancelled(uint256 indexed orderId, PoolId indexed poolId, address indexed owner, uint256 refund);
+    event TWAMMOrderClaimed(
+        uint256 indexed orderId, PoolId indexed poolId, address indexed owner, uint256 amountOut, uint256 refundAmount
+    );
     event TWAMMVirtualOrdersExecuted(
         PoolId indexed poolId, uint256 elapsedSeconds, uint256 virtualAmount0, uint256 virtualAmount1
     );
@@ -54,6 +151,13 @@ library TWAMMLogic {
     error TWAMMPoolKeyMismatch();
     error MaxActiveTWAMMOrdersReached(PoolId poolId);
     error TWAMMOrdersDisabled();
+
+    function ensureExecutor(TWAMMSwapExecutor executor) external returns (TWAMMSwapExecutor) {
+        if (address(executor) == address(0)) {
+            executor = new TWAMMSwapExecutor(IHasPoolManager(address(this)).poolManager(), address(this));
+        }
+        return executor;
+    }
 
     function submitOrder(
         mapping(PoolId => TWAMMState) storage states,
@@ -66,11 +170,41 @@ library TWAMMLogic {
         uint128 totalAmount,
         uint64 durationSeconds
     ) external {
-        if (durationSeconds == 0 || durationSeconds > MAX_TWAMM_DURATION || totalAmount < durationSeconds) {
+        submitOrder(
+            states,
+            orders,
+            activeOrderIds,
+            orderId,
+            poolId,
+            key,
+            zeroForOne,
+            totalAmount,
+            durationSeconds,
+            TWAMMSwapExecutor(payable(address(0)))
+        );
+    }
+
+    function submitOrder(
+        mapping(PoolId => TWAMMState) storage states,
+        mapping(uint256 => TWAMMOrder) storage orders,
+        mapping(PoolId => uint256[]) storage activeOrderIds,
+        uint256 orderId,
+        PoolId poolId,
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint128 totalAmount,
+        uint64 durationSeconds,
+        TWAMMSwapExecutor executor
+    ) public {
+        if (
+            states[poolId].lastVirtualOrderTimestamp == 0 || durationSeconds == 0
+                || durationSeconds > MAX_TWAMM_DURATION || totalAmount < durationSeconds
+                || totalAmount < MIN_TWAMM_ORDER_AMOUNT
+        ) {
             revert InvalidTWAMMInterval();
         }
         uint128 rate = uint128(Math.mulDiv(totalAmount, 1, durationSeconds, Math.Rounding.Floor));
-        executePending(states, orders, activeOrderIds, poolId);
+        executePendingWithSwap(states, orders, activeOrderIds, key, poolId, false, executor);
         uint256[] storage ids = activeOrderIds[poolId];
         if (ids.length >= MAX_ACTIVE_TWAMM_ORDERS) {
             revert MaxActiveTWAMMOrdersReached(poolId);
@@ -104,7 +238,12 @@ library TWAMMLogic {
             sellRatePerSecond: rate,
             startTimestamp: uint64(block.timestamp),
             expirationTimestamp: expiry,
-            cancelled: false
+            cancelled: false,
+            rateRemoved: false,
+            streamedAmount: 0,
+            swappedInputAmount: 0,
+            refundedInputAmount: 0,
+            claimableOutput: 0
         });
         ids.push(orderId);
 
@@ -118,22 +257,93 @@ library TWAMMLogic {
         PoolKey calldata key,
         uint256 orderId
     ) external returns (uint256 refundAmount) {
+        return cancelOrder(states, orders, activeOrderIds, key, orderId, TWAMMSwapExecutor(payable(address(0))));
+    }
+
+    function cancelOrder(
+        mapping(PoolId => TWAMMState) storage states,
+        mapping(uint256 => TWAMMOrder) storage orders,
+        mapping(PoolId => uint256[]) storage activeOrderIds,
+        PoolKey calldata key,
+        uint256 orderId,
+        TWAMMSwapExecutor executor
+    ) public returns (uint256 refundAmount) {
         TWAMMOrder storage order = orders[orderId];
         if (order.owner != msg.sender) revert NotTWAMMOrderOwner(msg.sender);
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(order.poolId)) revert TWAMMPoolKeyMismatch();
 
-        executePending(states, orders, activeOrderIds, order.poolId);
+        executePendingWithSwap(states, orders, activeOrderIds, key, order.poolId, false, executor);
         if (order.cancelled) {
             revert TWAMMOrderNotActive(orderId);
         }
 
         order.cancelled = true;
-        if (block.timestamp < order.expirationTimestamp) {
+        if (!order.rateRemoved) {
+            order.rateRemoved = true;
             TWAMMState storage state = states[order.poolId];
             if (order.zeroForOne) {
                 state.sellRate0For1 -= order.sellRatePerSecond;
             } else {
                 state.sellRate1For0 -= order.sellRatePerSecond;
+            }
+        }
+
+        uint256[] storage ids = activeOrderIds[order.poolId];
+        for (uint256 i = 0; i < ids.length; i++) {
+            if (ids[i] == orderId) {
+                ids[i] = ids[ids.length - 1];
+                ids.pop();
+                break;
+            }
+        }
+
+        refundAmount =
+            uint256(order.totalAmount) - uint256(order.swappedInputAmount) - uint256(order.refundedInputAmount);
+        if (refundAmount > 0) {
+            order.refundedInputAmount += uint128(refundAmount);
+            Currency inputCurrency = order.zeroForOne ? key.currency0 : key.currency1;
+            inputCurrency.transfer(msg.sender, refundAmount);
+        }
+
+        uint256 outAmount = order.claimableOutput;
+        if (outAmount > 0) {
+            order.claimableOutput = 0;
+            Currency outputCurrency = order.zeroForOne ? key.currency1 : key.currency0;
+            outputCurrency.transfer(msg.sender, outAmount);
+        }
+
+        emit TWAMMOrderCancelled(orderId, order.poolId, msg.sender, refundAmount);
+    }
+
+    function claimOrder(
+        mapping(PoolId => TWAMMState) storage states,
+        mapping(uint256 => TWAMMOrder) storage orders,
+        mapping(PoolId => uint256[]) storage activeOrderIds,
+        PoolKey calldata key,
+        uint256 orderId,
+        TWAMMSwapExecutor executor
+    ) external returns (uint256 amountOut, uint256 refundAmount) {
+        TWAMMOrder storage order = orders[orderId];
+        if (order.owner != msg.sender) revert NotTWAMMOrderOwner(msg.sender);
+        if (PoolId.unwrap(key.toId()) != PoolId.unwrap(order.poolId)) revert TWAMMPoolKeyMismatch();
+
+        executePendingWithSwap(states, orders, activeOrderIds, key, order.poolId, false, executor);
+
+        amountOut = order.claimableOutput;
+        if (amountOut > 0) {
+            order.claimableOutput = 0;
+            Currency outputCurrency = order.zeroForOne ? key.currency1 : key.currency0;
+            outputCurrency.transfer(msg.sender, amountOut);
+        }
+
+        if (block.timestamp >= order.expirationTimestamp || order.cancelled) {
+            refundAmount =
+                uint256(order.totalAmount) - uint256(order.swappedInputAmount) - uint256(order.refundedInputAmount);
+            if (refundAmount > 0) {
+                order.refundedInputAmount += uint128(refundAmount);
+                order.streamedAmount = order.swappedInputAmount;
+                Currency inputCurrency = order.zeroForOne ? key.currency0 : key.currency1;
+                inputCurrency.transfer(msg.sender, refundAmount);
             }
 
             uint256[] storage ids = activeOrderIds[order.poolId];
@@ -146,13 +356,7 @@ library TWAMMLogic {
             }
         }
 
-        refundAmount = order.totalAmount;
-        if (refundAmount > 0) {
-            Currency inputCurrency = order.zeroForOne ? key.currency0 : key.currency1;
-            inputCurrency.transfer(msg.sender, refundAmount);
-        }
-
-        emit TWAMMOrderCancelled(orderId, order.poolId, msg.sender, refundAmount);
+        emit TWAMMOrderClaimed(orderId, order.poolId, msg.sender, amountOut, refundAmount);
     }
 
     function executePending(
@@ -161,13 +365,13 @@ library TWAMMLogic {
         mapping(PoolId => uint256[]) storage activeOrderIds,
         PoolId poolId
     ) public {
-        TWAMMState storage state = states[poolId];
-        uint64 lastTs = state.lastVirtualOrderTimestamp;
-        if (lastTs == 0) {
-            state.lastVirtualOrderTimestamp = uint64(block.timestamp);
+        if (TransientContext.isInternalHookExecution(poolId)) {
             return;
         }
-        if (block.timestamp <= lastTs) return;
+
+        TWAMMState storage state = states[poolId];
+        uint64 lastTs = state.lastVirtualOrderTimestamp;
+        if (lastTs == 0 || block.timestamp <= lastTs) return;
 
         uint64 nowTs = uint64(block.timestamp);
         uint256 elapsed = nowTs - lastTs;
@@ -179,23 +383,37 @@ library TWAMMLogic {
         uint256 i = 0;
         while (i < ids.length) {
             TWAMMOrder storage order = orders[ids[i]];
-            uint64 endTs = order.expirationTimestamp < nowTs ? order.expirationTimestamp : nowTs;
-            if (endTs > lastTs) {
-                uint256 activeSeconds = uint256(endTs - lastTs);
-                uint256 vol = uint256(order.sellRatePerSecond) * activeSeconds;
-                if (order.zeroForOne) {
-                    v0 += vol;
-                } else {
-                    v1 += vol;
+            if (!order.rateRemoved && !order.cancelled) {
+                uint64 endTs = order.expirationTimestamp < nowTs ? order.expirationTimestamp : nowTs;
+                if (endTs > lastTs) {
+                    uint256 activeSeconds = uint256(endTs - lastTs);
+                    uint256 vol = uint256(order.sellRatePerSecond) * activeSeconds;
+                    uint256 remaining = uint256(order.totalAmount) - uint256(order.streamedAmount);
+                    if (vol > remaining) {
+                        vol = remaining;
+                    }
+                    order.streamedAmount += uint128(vol);
+                    if (order.zeroForOne) {
+                        v0 += vol;
+                    } else {
+                        v1 += vol;
+                    }
+                }
+
+                if (order.expirationTimestamp <= nowTs) {
+                    order.rateRemoved = true;
+                    if (order.zeroForOne) {
+                        state.sellRate0For1 -= order.sellRatePerSecond;
+                    } else {
+                        state.sellRate1For0 -= order.sellRatePerSecond;
+                    }
                 }
             }
 
-            if (order.expirationTimestamp <= nowTs) {
-                if (order.zeroForOne) {
-                    state.sellRate0For1 -= order.sellRatePerSecond;
-                } else {
-                    state.sellRate1For0 -= order.sellRatePerSecond;
-                }
+            if (
+                order.cancelled
+                    || (order.expirationTimestamp <= nowTs && order.swappedInputAmount == order.streamedAmount)
+            ) {
                 ids[i] = ids[ids.length - 1];
                 ids.pop();
             } else {
@@ -207,6 +425,156 @@ library TWAMMLogic {
             state.accruedVirtualVolume0 += v0;
             state.accruedVirtualVolume1 += v1;
             emit TWAMMVirtualOrdersExecuted(poolId, elapsed, v0, v1);
+        }
+    }
+
+    function executePendingWithSwap(
+        mapping(PoolId => TWAMMState) storage states,
+        mapping(uint256 => TWAMMOrder) storage orders,
+        mapping(PoolId => uint256[]) storage activeOrderIds,
+        PoolKey calldata key,
+        PoolId poolId,
+        bool inUnlock,
+        TWAMMSwapExecutor executor
+    ) public {
+        if (TransientContext.isInternalHookExecution(poolId)) return;
+
+        executePending(states, orders, activeOrderIds, poolId);
+
+        uint256[] storage ids = activeOrderIds[poolId];
+        if (ids.length == 0) return;
+
+        (uint256 totalUnswapped0, uint256 totalUnswapped1) = _sumUnswapped(orders, ids);
+        if (totalUnswapped0 == 0 && totalUnswapped1 == 0) return;
+
+        IPoolManager poolManager = IHasPoolManager(address(this)).poolManager();
+        if (StateLibrary.getLiquidity(poolManager, poolId) == 0) return;
+
+        if (!inUnlock && address(executor) == address(0)) {
+            executor = new TWAMMSwapExecutor(poolManager, address(this));
+        }
+
+        TransientContext.setInternalHookExecution(poolId, true);
+
+        if (totalUnswapped0 > 0) {
+            (uint256 actualIn0, uint256 actualOut0) =
+                _swapVirtualInput(poolManager, key, true, totalUnswapped0, inUnlock, executor);
+            if (actualIn0 > 0) {
+                _distributeDirection(orders, ids, true, totalUnswapped0, actualIn0, actualOut0);
+            }
+        }
+
+        if (totalUnswapped1 > 0) {
+            (uint256 actualIn1, uint256 actualOut1) =
+                _swapVirtualInput(poolManager, key, false, totalUnswapped1, inUnlock, executor);
+            if (actualIn1 > 0) {
+                _distributeDirection(orders, ids, false, totalUnswapped1, actualIn1, actualOut1);
+            }
+        }
+
+        TransientContext.setInternalHookExecution(poolId, false);
+        _pruneSettledOrders(orders, ids);
+    }
+
+    function _sumUnswapped(mapping(uint256 => TWAMMOrder) storage orders, uint256[] storage ids)
+        private
+        view
+        returns (uint256 total0, uint256 total1)
+    {
+        for (uint256 i = 0; i < ids.length; i++) {
+            TWAMMOrder storage order = orders[ids[i]];
+            if (!order.cancelled && order.streamedAmount > order.swappedInputAmount) {
+                uint256 unswapped = uint256(order.streamedAmount - order.swappedInputAmount);
+                if (order.zeroForOne) {
+                    total0 += unswapped;
+                } else {
+                    total1 += unswapped;
+                }
+            }
+        }
+    }
+
+    function _distributeDirection(
+        mapping(uint256 => TWAMMOrder) storage orders,
+        uint256[] storage ids,
+        bool zeroForOne,
+        uint256 totalUnswapped,
+        uint256 actualIn,
+        uint256 actualOut
+    ) private {
+        for (uint256 j = 0; j < ids.length; j++) {
+            TWAMMOrder storage order = orders[ids[j]];
+            if (!order.cancelled && order.zeroForOne == zeroForOne && order.streamedAmount > order.swappedInputAmount) {
+                uint256 unswapped = uint256(order.streamedAmount - order.swappedInputAmount);
+                uint256 inShare =
+                    actualIn == totalUnswapped ? unswapped : Math.mulDiv(actualIn, unswapped, totalUnswapped);
+                uint256 outShare = Math.mulDiv(actualOut, unswapped, totalUnswapped);
+                order.swappedInputAmount += uint128(inShare);
+                order.claimableOutput += outShare;
+            }
+        }
+    }
+
+    function _pruneSettledOrders(mapping(uint256 => TWAMMOrder) storage orders, uint256[] storage ids) private {
+        uint64 nowTs = uint64(block.timestamp);
+        uint256 j = 0;
+        while (j < ids.length) {
+            TWAMMOrder storage order = orders[ids[j]];
+            if (
+                order.cancelled
+                    || (order.expirationTimestamp <= nowTs && order.swappedInputAmount == order.streamedAmount)
+            ) {
+                ids[j] = ids[ids.length - 1];
+                ids.pop();
+            } else {
+                j++;
+            }
+        }
+    }
+
+    function _swapVirtualInput(
+        IPoolManager poolManager,
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 inputAmount,
+        bool inUnlock,
+        TWAMMSwapExecutor executor
+    ) private returns (uint256 actualIn, uint256 actualOut) {
+        if (inUnlock) {
+            BalanceDelta delta = poolManager.swap(
+                key,
+                SwapParams({
+                    zeroForOne: zeroForOne,
+                    amountSpecified: -int256(inputAmount),
+                    sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+                }),
+                ""
+            );
+
+            if (delta.amount0() < 0) {
+                key.currency0.settle(poolManager, address(this), uint256(uint128(-delta.amount0())), false);
+            } else if (delta.amount0() > 0) {
+                key.currency0.take(poolManager, address(this), uint256(uint128(delta.amount0())), false);
+            }
+
+            if (delta.amount1() < 0) {
+                key.currency1.settle(poolManager, address(this), uint256(uint128(-delta.amount1())), false);
+            } else if (delta.amount1() > 0) {
+                key.currency1.take(poolManager, address(this), uint256(uint128(delta.amount1())), false);
+            }
+
+            int128 inDelta = zeroForOne ? delta.amount0() : delta.amount1();
+            int128 outDelta = zeroForOne ? delta.amount1() : delta.amount0();
+            actualIn = inDelta < 0 ? uint256(uint128(-inDelta)) : 0;
+            actualOut = outDelta > 0 ? uint256(uint128(outDelta)) : 0;
+        } else {
+            Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
+            if (inputCurrency.isAddressZero()) {
+                (actualIn, actualOut) = executor.executeVirtualSwap{value: inputAmount}(key, zeroForOne, inputAmount);
+            } else {
+                IERC20(Currency.unwrap(inputCurrency)).safeTransfer(address(executor), inputAmount);
+                (actualIn, actualOut) = executor.executeVirtualSwap(key, zeroForOne, inputAmount);
+            }
         }
     }
 
@@ -227,9 +595,17 @@ library TWAMMLogic {
         uint256[] storage ids = activeOrderIds[poolId];
         for (uint256 i = 0; i < ids.length; i++) {
             TWAMMOrder storage order = orders[ids[i]];
+            if (order.rateRemoved || order.cancelled) continue;
             uint64 endTs = order.expirationTimestamp < nowTs ? order.expirationTimestamp : nowTs;
-            uint256 activeSeconds = uint256(endTs - lastTs);
-            uint256 vol = uint256(order.sellRatePerSecond) * activeSeconds;
+            uint256 vol = 0;
+            if (endTs > lastTs) {
+                uint256 activeSeconds = uint256(endTs - lastTs);
+                vol = uint256(order.sellRatePerSecond) * activeSeconds;
+                uint256 remaining = uint256(order.totalAmount) - uint256(order.streamedAmount);
+                if (vol > remaining) {
+                    vol = remaining;
+                }
+            }
             if (order.zeroForOne) {
                 projected.accruedVirtualVolume0 += vol;
                 if (order.expirationTimestamp <= nowTs) {
@@ -248,11 +624,13 @@ library TWAMMLogic {
 /// @title TWAMMBlock
 /// @notice Group 5 (Trading) — Block #16: Time-Weighted Average Market Maker streaming virtual orders
 ///         (`beforeInitialize`, `beforeAddLiquidity`, `beforeSwap`).
-/// @dev Trust Level: Low (bounded virtual order streaming between checkpoints with automatic expiration retirement).
+/// @dev Trust Level: Low (bounded virtual order streaming between checkpoints with automatic expiration retirement
+///      and real pool swap settlement).
 abstract contract TWAMMBlock is IHookRigBlock {
     using PoolIdLibrary for PoolKey;
 
     uint256 internal nextTWAMMOrderId = 1;
+    TWAMMSwapExecutor internal _twammExecutor;
     mapping(PoolId poolId => TWAMMLogic.TWAMMState state) internal _twammStates;
     mapping(uint256 orderId => TWAMMLogic.TWAMMOrder order) internal _twammOrders;
     mapping(PoolId poolId => uint256[] activeOrderIds) internal _poolTWAMMOrderIds;
@@ -265,19 +643,74 @@ abstract contract TWAMMBlock is IHookRigBlock {
         _twammStates[poolId].lastVirtualOrderTimestamp = uint64(block.timestamp);
     }
 
-    /// @notice Disabled: TWAMM only tracks virtual volume and never swaps deposits, so an order could never pay
-    ///         out. Existing orders stay cancellable for a full refund through `cancelTWAMMOrder`.
-    function submitTWAMMOrder(PoolKey calldata, bool, uint128, uint64) external payable returns (uint256) {
-        revert TWAMMLogic.TWAMMOrdersDisabled();
+    function _ensureTWAMMExecutor() internal returns (TWAMMSwapExecutor executor) {
+        executor = _twammExecutor;
+        if (address(executor) == address(0)) {
+            executor = TWAMMLogic.ensureExecutor(executor);
+            _twammExecutor = executor;
+        }
     }
 
-    function cancelTWAMMOrder(PoolKey calldata key, uint256 orderId) external returns (uint256 refundAmount) {
-        return TWAMMLogic.cancelOrder(_twammStates, _twammOrders, _poolTWAMMOrderIds, key, orderId);
+    /// @notice Submits a new TWAMM streaming order that executes over `durationSeconds` against the pool.
+    function submitTWAMMOrder(PoolKey calldata key, bool zeroForOne, uint128 totalAmount, uint64 durationSeconds)
+        external
+        payable
+        virtual
+        returns (uint256 orderId)
+    {
+        orderId = nextTWAMMOrderId++;
+        PoolId poolId = key.toId();
+        TWAMMSwapExecutor executor = _poolTWAMMOrderIds[poolId].length > 0 ? _ensureTWAMMExecutor() : _twammExecutor;
+        TWAMMLogic.submitOrder(
+            _twammStates,
+            _twammOrders,
+            _poolTWAMMOrderIds,
+            orderId,
+            poolId,
+            key,
+            zeroForOne,
+            totalAmount,
+            durationSeconds,
+            executor
+        );
+    }
+
+    /// @notice Cancels an active TWAMM order, settling any already-streamed volume (when liquidity exists), refunding
+    ///         unswapped input tokens, and paying out any accrued output tokens.
+    function cancelTWAMMOrder(PoolKey calldata key, uint256 orderId) external virtual returns (uint256 refundAmount) {
+        TWAMMSwapExecutor executor = _ensureTWAMMExecutor();
+        return TWAMMLogic.cancelOrder(_twammStates, _twammOrders, _poolTWAMMOrderIds, key, orderId, executor);
+    }
+
+    /// @notice Claims accrued output tokens (and any remaining unswapped/truncation-dust input once expired) for a
+    ///         TWAMM order.
+    function claimTWAMMOrder(PoolKey calldata key, uint256 orderId)
+        external
+        virtual
+        returns (uint256 amountOut, uint256 refundAmount)
+    {
+        return _claimTWAMMOrder(key, orderId);
+    }
+
+    function _claimTWAMMOrder(PoolKey calldata key, uint256 orderId)
+        internal
+        returns (uint256 amountOut, uint256 refundAmount)
+    {
+        TWAMMSwapExecutor executor = _ensureTWAMMExecutor();
+        return TWAMMLogic.claimOrder(_twammStates, _twammOrders, _poolTWAMMOrderIds, key, orderId, executor);
     }
 
     /// @notice Advances TWAMM virtual order streaming up to `block.timestamp`.
     function _executePendingTWAMMOrders(PoolId poolId) internal {
         TWAMMLogic.executePending(_twammStates, _twammOrders, _poolTWAMMOrderIds, poolId);
+    }
+
+    /// @notice Advances TWAMM virtual order streaming up to `block.timestamp` and settles streamed volume against the
+    ///         already-unlocked `PoolManager`.
+    function _executePendingTWAMMOrders(PoolKey calldata key, PoolId poolId) internal {
+        TWAMMLogic.executePendingWithSwap(
+            _twammStates, _twammOrders, _poolTWAMMOrderIds, key, poolId, true, TWAMMSwapExecutor(payable(address(0)))
+        );
     }
 
     function _previewTWAMMState(PoolId poolId) internal view returns (TWAMMLogic.TWAMMState memory) {

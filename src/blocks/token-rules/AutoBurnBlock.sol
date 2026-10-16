@@ -42,10 +42,15 @@ library AutoBurnLogic {
         if (burnAmount == 0) return;
 
         if (configs[poolId].useTokenBurnCall && !currency.isAddressZero()) {
+            address token = Currency.unwrap(currency);
+            uint256 balBefore = IERC20(token).balanceOf(address(this));
             manager.take(currency, address(this), burnAmount);
-            try ERC20Burnable(Currency.unwrap(currency)).burn(burnAmount) {}
-            catch {
-                IERC20(Currency.unwrap(currency)).safeTransfer(DEAD_ADDRESS, burnAmount);
+            uint256 received = IERC20(token).balanceOf(address(this)) - balBefore;
+            if (received > 0) {
+                try ERC20Burnable(token).burn(received) {}
+                catch {
+                    IERC20(token).safeTransfer(DEAD_ADDRESS, received);
+                }
             }
         } else {
             manager.take(currency, DEAD_ADDRESS, burnAmount);

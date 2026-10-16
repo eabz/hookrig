@@ -36,10 +36,48 @@ library ReferralSplitLogic {
         address trader,
         address referrer
     ) external {
-        if (referrer == address(0) || referrer == trader) revert InvalidSelfReferral(trader);
+        if (referrer == address(0) || referrer == trader || _isDisallowed(referrer) || _isDisallowed(trader)) {
+            revert InvalidSelfReferral(trader);
+        }
         if (referrers[poolId][trader] == address(0)) {
             referrers[poolId][trader] = referrer;
             emit ReferrerRegistered(poolId, trader, referrer);
+        }
+    }
+
+    function _isDisallowed(address account) private view returns (bool) {
+        if (account == address(this)) return true;
+        (bool ok, bytes memory data) =
+            address(this).staticcall(abi.encodeWithSignature("isTrustedRouter(address)", account));
+        return ok && data.length >= 32 && abi.decode(data, (bool));
+    }
+
+    function resolveReferrer(
+        mapping(PoolId => IHookRigBlock.ReferralSplitParams) storage referralConfigs,
+        mapping(PoolId => mapping(address => address)) storage traderReferrer,
+        PoolId poolId,
+        address trader
+    ) public view returns (address referrer, uint16 referralBps) {
+        return resolveReferrer(referralConfigs, traderReferrer, poolId, trader, false);
+    }
+
+    function resolveReferrer(
+        mapping(PoolId => IHookRigBlock.ReferralSplitParams) storage referralConfigs,
+        mapping(PoolId => mapping(address => address)) storage traderReferrer,
+        PoolId poolId,
+        address trader,
+        bool traderIsSender
+    ) public view returns (address referrer, uint16 referralBps) {
+        if (traderIsSender || trader == address(0)) {
+            return (address(0), 0);
+        }
+        referrer = traderReferrer[poolId][trader];
+        if (referrer == address(0) || referrer == trader) {
+            return (address(0), 0);
+        }
+        referralBps = referralConfigs[poolId].referralFeeBps;
+        if (referralBps == 0) {
+            return (address(0), 0);
         }
     }
 
@@ -54,14 +92,12 @@ library ReferralSplitLogic {
         uint256 grossAmount,
         bool isExactInput,
         uint256 totalCutAmount
-    ) external returns (uint256 newTotalCut) {
+    ) public returns (uint256 newTotalCut) {
         newTotalCut = totalCutAmount;
-        address referrer = traderReferrer[poolId][trader];
-        if (referrer == address(0) || referrer == trader) return newTotalCut;
+        (address referrer, uint16 refBps) = resolveReferrer(referralConfigs, traderReferrer, poolId, trader, false);
+        if (referrer == address(0) || refBps == 0) return newTotalCut;
         uint256 refCut;
         {
-            uint16 refBps = referralConfigs[poolId].referralFeeBps;
-            if (refBps == 0) return newTotalCut;
             Math.Rounding rounding = isExactInput ? Math.Rounding.Floor : Math.Rounding.Ceil;
             uint256 maxAllowed = Math.mulDiv(grossAmount, 2500, 10_000, rounding);
             if (newTotalCut >= maxAllowed) return newTotalCut;
@@ -99,10 +135,7 @@ abstract contract ReferralSplitBlock is IHookRigBlock {
         view
         returns (uint16 referralBps, address referrer)
     {
-        referralBps = _referralConfigs[poolId].referralFeeBps;
-        referrer = traderReferrer[poolId][trader];
-        if (referrer == trader) {
-            referrer = address(0);
-        }
+        (referrer, referralBps) =
+            ReferralSplitLogic.resolveReferrer(_referralConfigs, traderReferrer, poolId, trader, false);
     }
 }

@@ -47,16 +47,16 @@ Because `hookrig` allows users to compose up to 17+ distinct building blocks and
 Beyond standard v4 checks, `hookrig` specifically defends against six subtle protocol-level attack vectors:
 
 ### 3.1 JIT (Just-In-Time) Liquidity Dilution on `LP rewards` & `Arb recapture`
-- **The Attack**: `LP rewards` and `Arb recapture` call `PoolManager.donate()` inside `afterSwap`, which distributes rewards pro-rata to currently active in-range liquidity `L`. An MEV searcher who sees a large buy swap in the mempool can front-run with a massive single-tick `addLiquidity`, absorb $99\%$ of the `donate()` reward in `afterSwap`, and immediately back-run with `removeLiquidity` in the same block.
+- **The Attack**: `LP rewards`, `Arb recapture`, and `Auto buyback` distribute rewards to in-range liquidity `L` via `PoolManager.donate()`. An MEV searcher who sees a swap in the mempool can attempt to front-run with a single-tick `addLiquidity`, absorb `donate()` rewards, and immediately back-run with `removeLiquidity`.
 - **Our Defense**:
-  - Optional **`JIT Liquidity Guard` (`jit_guard`)** tracks `lastAddBlock[poolId][positionKey]` in `beforeAddLiquidity` keyed on the canonical `PoolManager` position `(routerSender, tickLower, tickUpper, salt)`.
-  - If liquidity is removed within `minHoldBlocks` (even `1` block prevents atomic JIT bundles), `beforeRemoveLiquidity` reverts with `JITExitPenaltyRequired(poolId, positionKey, earlyExitPenaltyBps)` when an exit penalty is configured or `JITGuardHoldActive` otherwise.
+  1. **Deferred Block-Gated LP Donations (`pendingLPDonation`)**: `ArbRecapture`, `LPRewards`, and `AutoBuyback` queue donations as ERC-6909 claims in `pendingLPDonation[poolId][currency]` during `afterSwap` and only flush them via `PoolManager.donate()` in `beforeSwap` of a later transaction when `block.number > _lastLiquidityAddBlock[poolId]`.
+  2. **Per-Owner Tracked Liquidity & Position Hold (`JITGuard`)**: `JITGuardBlock` tracks both `lpAddedBlock` and `lpTrackedLiquidity` per `ownerKey` `(sender, lpOwner, tickLower, tickUpper, salt)` and per `posKey` `(sender, tickLower, tickUpper, salt)`. If an account attempts to remove more liquidity than its own `lpTrackedLiquidity[poolId][ownerKey]` (e.g., adding from account A and removing from account B on a shared router), `JITGuard` enforces the underlying `posKey`'s latest addition block as well. On shared untrusted routers (`lpOwner == sender`), dust additions (`< 5%` of existing tracked liquidity) do not reset an existing position's hold timer. When `jitExitPenaltyBps > 0` and `minLPHoldBlocks == 0`, `JITGuard` enforces a minimum 1-block hold in `beforeRemoveLiquidity` (no principal confiscation).
 
 ### 3.2 Recursive Hook Self-Swap Deadlocks (`TWAMM` & `Limit orders`)
-- **The Attack**: When `Limit orders` or `TWAMM` executes virtual swaps or modifies liquidity *inside* a hook callback (`beforeSwap` or `afterSwap`), `PoolManager` is already unlocked. If the hook calls `PoolManager.swap()` to settle a virtual order, `PoolManager` will recursively invoke `Hook.beforeSwap()` and `Hook.afterSwap()` again—causing infinite recursion, double taxation, or corrupted transient storage snapshots.
+- **The Attack**: When `Limit orders` or `TWAMM` executes virtual/claim swaps *inside* `beforeSwap` or via dedicated swap executors, `PoolManager` invokes `Hook.beforeSwap()` and `Hook.afterSwap()`. Without reentrancy/executor recognition, internal swaps would trigger recursive hook execution, double taxation, or corrupted transient storage snapshots.
 - **Our Defense**:
-  - `TransientContext` maintains a per-`PoolId` transient reentrancy/bypass flag (`bool isInternalHookExecution`).
-  - Whenever `TWAMM` or `Limit orders` initiates an internal `PoolManager` action, it sets `isInternalHookExecution = true` in `EIP-1153` transient storage, causing the re-entered callback to immediately return a no-op selector and zero delta.
+  - `LimitOrderSwapExecutor` implements `IMsgSender` so limit-order claim swaps run through the full hook pipeline attributed to the order maker (`minAmountOut` slippage protection via `claimLimitOrder(key, orderId, minAmountOut)`).
+  - `TWAMMBlock` settles accrued virtual order volume against pool liquidity in `beforeSwap` (and via `TWAMMSwapExecutor` when triggered outside `unlock` during `claimTWAMMOrder` / `cancelTWAMMOrder`), while `HookRigOrchestrator` bypasses recursive hook logic when `sender == address(this) || sender == address(_twammExecutor)`.
 
 ### 3.3 `afterSwapReturnDelta` Exact-In vs. Exact-Out Direction Inversion
 - **The Attack**: In Uniswap v4, `afterSwapReturnDelta` always modifies the **unspecified currency**:
@@ -65,31 +65,30 @@ Beyond standard v4 checks, `hookrig` specifically defends against six subtle pro
   - If a hook blindly assumes `afterSwapReturnDelta` is always the output token, an attacker can submit an `exactOutput` buy (`amountSpecified > 0`) to force the hook to tax/burn the quote token instead of the project token, or underflow delta math.
 - **Our Defense**:
   - `AfterSwapDeltaAggregator` explicitly branches on `params.amountSpecified < 0` vs `> 0`.
-  - On `exactOutput` swaps, percentage cuts are computed against the gross input amount in the unspecified currency (using `Math.Rounding.Ceil` on added input cost), and `Auto burn` / `King of the Pool` only execute when `ctx.unspecifiedCurrency == ctx.projectCurrency` (`GL-24`, `FF-03`).
+  - On `exactOutput` swaps, percentage cuts are computed against the gross input amount in the unspecified currency (using `Math.Rounding.Ceil` on added input cost), and `exactOutput` buys revert with `ExactOutputBuyNotSupported` on pools with `Auto burn` or `King of the Pool` (`GL-24`, `FF-03`).
 
 ### 3.4 `LP rewards` & `Arb recapture` Zero-Liquidity `donate()` Revert
 - **The Caveat**: Calling `PoolManager.donate(key, amount0, amount1, "")` when active in-range liquidity `L == 0` reverts inside `PoolManager` (`NoLiquidityToReceiveFees`).
-- **Our Defense**: Before calling `PoolManager.donate()`, `AfterSwapDeltaAggregator` checks `StateLibrary.getLiquidity(poolManager, poolId) > 0`. If active liquidity is `0`, the LP reward slice is skipped (`0` delta taken) or routed to a per-pool pending reward claim until liquidity returns, ensuring swaps never brick in thin pools.
+- **Our Defense**: LP reward cuts are queued in `pendingLPDonation[poolId][currency]` during `afterSwap`, and `AutoBuybackLogic.flushPendingDonations` only calls `PoolManager.donate()` in `beforeSwap` when `StateLibrary.getLiquidity(poolManager, poolId) > 0` and `block.number > _lastLiquidityAddBlock[poolId]`, ensuring swaps never brick in thin or zero-liquidity pools.
 
 ### 3.5 `King of the Pool` Dust-Reset Griefing & Router Crown Theft
 - **The Caveats**:
   1. Without a minimum buy threshold, a bot could reset a 168-hour `King of the Pool` countdown timer forever by swapping $\$0.01$ every few hours.
-  2. Recording `sender` as the King would credit the Router contract instead of the trader.
+  2. Recording an untrusted `sender` as the King would credit a shared Router contract instead of an EOA trader.
 - **Our Defense**:
-  - Enforces a configurable `minBuyAmountForReset` (denominated in quote currency or basis points of current pot). Buys below this threshold still contribute `potBps` if configured, but **do not reset the timer or transfer the crown**.
-  - Resolves the King's address via `IMsgSender(sender).msgSender()` or verified `hookData` recipient (on trusted routers), and settles payouts strictly via pull (`claimKingPot(poolId, roundId, recipient)`).
+  - Enforces a configurable `minBuyAmountForReset` (and requires a non-zero `potContribution > 0`). Buys below this threshold still contribute `potBps` to the pot, but **do not reset the timer or transfer the crown**.
+  - Resolves the King's address via `IMsgSender(sender).msgSender()` or verified `hookData` recipient on trusted routers; swaps through untrusted routers (`trader == sender`) contribute to the pot without crowning the router contract. Payouts settle strictly via pull (`claimKingPot(poolId, roundId, recipient)`).
 
 ### 3.6 Aggregate Return-Delta Budget Guardrail
 - **The Caveat**: If a user stacks multiple return-delta blocks (`Arb recapture` + `Buy and sell tax` + `Auto burn` + `Fee sharing` + `LP rewards` + `King of the Pool` + `Referral split` + `Auto buyback` + `5 bps` `Protocol Royalty`) with excessive percentages, total cuts could exceed $100\%$ of swap output.
-- **Our Defense**: `AfterSwapDeltaAggregator._validateAggregateReturnDeltaBudget` validates at pool configuration that neither the maximum Buy-side cut (`maxBuyBps`) nor the maximum Sell-side cut (`maxSellBps`), including `PROTOCOL_ROYALTY_BPS = 5`, can exceed `MAX_AGGREGATE_AFTER_SWAP_BPS = 2500` ($25\%$).
+- **Our Defense**: `AfterSwapDeltaAggregator.validateTaxBudget` validates at pool configuration that neither the maximum deterministic Buy-side cut (`maxBuyBps`) nor the maximum deterministic Sell-side cut (`maxSellBps`), including `PROTOCOL_ROYALTY_BPS = 5`, can exceed `MAX_AGGREGATE_AFTER_SWAP_BPS = 2500` ($25\%$), while dynamic runtime slices (`ArbRecapture`) are bounded by remaining budget inside `_executeAfterSwapDeltaWaterfall`.
 
-### 3.7 Audit Hardening (2026-10-15 three-pass audit)
-- **Queued LP donations**: `ArbRecapture`, `LPRewards` and `AutoBuyback` cuts are always taken, held as hook ERC-6909 (`pendingLPDonation`), and donated in `beforeSwap` of a later swap — never by the swap that paid them, and never in a block where liquidity was added. A just-in-time position must therefore hold across a block boundary, like any other LP.
+### 3.7 Audit Hardening (2026-10-15 four-pass audit)
+- **Queued LP donations**: `ArbRecapture`, `LPRewards` and `AutoBuyback` cuts are always taken, held as hook ERC-6909 (`pendingLPDonation`), and donated in `beforeSwap` of a later swap — never by the swap that paid them, and never in a block where liquidity was added.
 - **Exact-output buys** revert (`ExactOutputBuyNotSupported`) on pools with `AutoBurn` or `King of the Pool`, because both cut the project token on the unspecified leg.
-- **Preset hooks** reject any block whose callbacks the hook address does not enable (`validateBitmapAndPermissions` compares `permissionsForBitmap(bitmap)` with the address flags).
-- **Launchpad**: launches accept only the default orchestrator, reject `AccessControl` and AntiSnipe launch fees above 25%, cap `tickSpacing` at `MAX_TICK_SPACING`, and bind the CREATE2 salt to the sender. Pools can only be registered for tokens that already exist.
-- **Graduation**: `SteppedTrancheLaunch` opens the pool at the price of the last curve fill and seeds the King pot only when the pool runs `King of the Pool`; `VirtualXYKLaunch` seeds proportionally less quote when it clamps LP tokens. The curve-owned graduation LP is locked by design, so its fees stay in `PoolManager` (the equivalent of burned LP tokens).
-- **Known limit**: the JIT guard keys hold periods per end user, so an attacker who adds from one address and removes an older position from another still escapes the hold. Keying by the router-owned position instead would let any router user re-lock everyone else's liquidity.
+- **Pool initialization authentication**: Registered pools can only be initialized in `PoolManager` by their `poolAdmin` (or `owner`) for standard pools, or by `authorizedCurve` for launchpad pools (`UnauthorizedPoolInitializer`). `setLaunchpadFactory` is one-time-only (`LaunchpadFactoryAlreadySet`).
+- **Untrusted router attribution hardening**: `WalletCap` rejects buys through untrusted routers (`UntrustedRouterNotAllowedForWalletCap`) so disposable router contracts cannot bypass per-wallet caps; `KingOfThePool` and `ReferralSplit` do not crown or pay referral cuts to untrusted routers; `AccessControl` rejects self-attributed router addresses.
+- **Launchpad**: launches accept only the default orchestrator, reject `AccessControl` and AntiSnipe launch fees above 25%, cap `tickSpacing` at `MAX_TICK_SPACING`, require non-zero `tokensOut` and reject fee-on-transfer quote tokens, validate `NativeTickLaunch` bands with zero stranded dust, gate creator `LaunchpadVestingWallet` releases until graduation, and bind the CREATE2 salt to the deployer (`predictTokenAddressFor(meta, salt, deployer)`).
 
 ---
 
@@ -99,28 +98,28 @@ Every block in `hookrig` is assigned an explicit **Trust Level** (`Low` vs. `Med
 
 | Block | Trust Level | Manager Capability | Immutable On-Chain Hard Guardrail (Anti-Rug) |
 | :--- | :--- | :--- | :--- |
-| **Dynamic fee** | Low | Immutable once initialized | Bounded between `minFee` and `MAX_DYNAMIC_FEE` ($\le 5\%$). |
-| **Managed fee** | Medium | Manager can update LP fee | Cannot exceed immutable `feeCap` set at initialization (max $\le 5\%$). |
+| **Dynamic fee** | Low | Immutable once initialized | Bounded between `baseFee` and `maxFee` ($\le 5\%$). Observes completed pre-swap tick displacement and prevents same-block zero-delta wash swaps from decaying `emaTickDelta`. |
+| **Managed fee** | Medium | Manager can update LP fee | Cannot exceed immutable `feeCap` set at initialization (max $\le 5\%$); pre-initialization updates stage the fee without reverting. |
 | **Market-hours fee** | Low | Immutable UTC schedule | Open/closed fees bounded at initialization ($\le 5\%$). |
-| **Anti-snipe** | Low | Immutable decay curve | Monotonically decreases from `launchFee` to `baseFee` over $N$ blocks; can never be re-triggered after block $N$. |
-| **MEV protection** | Low | Immutable impact/cooldown bounds | Purely algorithmic; cannot block normal retail-sized swaps. |
-| **Arb recapture** | Medium | Configurable recapture share % | Recapture cut capped at $\le 80\%$ of measured arbitrage spread; 100% of captured value is donated to pool LPs (`PoolManager.donate`). |
+| **Anti-snipe** | Low | Immutable decay curve | Monotonically decreases from `launchFee` to `normalFee` over $N$ blocks; can never be re-triggered after block $N$. |
+| **MEV protection** | Low | Immutable impact/cooldown bounds | Purely algorithmic; direction lock ignores `<= 1` tick dust swaps so 1-wei swaps cannot grief opposite-direction traders. |
+| **Arb recapture** | Medium | Configurable recapture share % | Recapture cut capped at $\le 80\%$ of measured arbitrage spread; `referenceTick` remains anchored across sub-threshold steps to prevent split-swap evasion. |
 | **Access control** | Medium | Manager updates allowlist / verifier | **Applies ONLY to `beforeAddLiquidity` and/or `beforeSwap`**. Never applies to `beforeRemoveLiquidity`, guaranteeing an unhindered exit even if a user is later removed from the allowlist. |
-| **Wallet cap** | Low | Immutable max % of supply (or auto-sunset after $M$ blocks) | Checks `projectToken.balanceOf(recipient) <= maxWalletAmount`. Cannot freeze selling (`isBuy == false` is always exempt). |
-| **Buy and sell tax** | Medium | `poolAdmin` can call `setBuySellTax` | Hard cap: `buyTaxBps <= 1000` ($10\%$) and `sellTaxBps <= 1000` ($10\%$). Always **decay-only**: `setBuySellTax` can only lower taxes after registration, whatever `decayOnly` says. |
-| **Auto burn** | Medium | Burn bps configured at init | Hard cap: `burnBps <= 500` ($5\%$). Applies on buys when `unspecifiedCurrency == projectCurrency` only (`GL-24`). |
+| **Wallet cap** | Low | Immutable max % of supply (or auto-sunset after $M$ blocks) | Checks `projectToken.balanceOf(recipient) <= maxWalletAmount` on trusted routers (`UntrustedRouterNotAllowedForWalletCap` on untrusted routers). Cannot freeze selling (`isBuy == false` is always exempt). |
+| **Buy and sell tax** | Medium | `poolAdmin` can call `setBuySellTax` | Hard cap: `buyTaxBps <= 1000` ($10\%$) and `sellTaxBps <= 1000` ($10\%$). Always **decay-only**: `setBuySellTax` can only lower taxes after registration, and passing `newRecipient = address(0)` preserves the existing recipient. |
+| **Auto burn** | Medium | Burn bps configured at init | Hard cap: `burnBps <= 500` ($5\%$). Burns actual received balance around `PoolManager.take()`. |
 | **Fee sharing** | Medium | Recipient split updates | Hard cap: `feeShareBps <= 500` ($5\%$). Stored as pullable ERC-6909 claims. |
 | **LP rewards** | Medium | Extra buy fee bps | Hard cap: `lpRewardBps <= 500` ($5\%$). Queued as hook ERC-6909 and donated by the first swap of a later block with no liquidity added (see 3.7). |
-| **Swap rewards** | Low | Emission rate | Non-custodial accounting points on net post-cut swap volume; cannot block swaps. |
+| **Swap rewards** | Low | Emission rate | Non-custodial accounting points on net post-cut project token volume; cannot block swaps. |
 | **King of the Pool** | Medium | Pot fee bps & round duration | Hard cap: `potBps <= 500` ($5\%$). Winner claims jackpot via pull (`claimKingPot(poolId, roundId, recipient)`)—never pushed mid-swap. |
-| **Limit orders** | Low | Fully permissionless | Per-pool currency escrow isolation (`limitOrderPoolEscrow`); users can always cancel unclaimed orders, filled or not (`cancelLimitOrder`), or claim filled orders (`claimLimitOrder`, with an optional `minAmountOut`). The claim swap runs the full hook pipeline and is attributed to the maker. |
-| **TWAMM** | Low | Fully permissionless | **New orders are disabled** (`submitTWAMMOrder` reverts `TWAMMOrdersDisabled`): the block only tracks virtual volume and never swaps deposits. Existing orders stay cancellable for a full refund. |
+| **Limit orders** | Low | Fully permissionless | Per-pool currency escrow isolation (`limitOrderPoolEscrow`) and epoch-indexed tick buckets (`MAX_TICK_FILLS_PER_SWAP = 512`). Users can always cancel unclaimed orders (`cancelLimitOrder`) or claim filled orders (`claimLimitOrder(key, orderId, minAmountOut)`). |
+| **TWAMM** | Low | Fully permissionless | Enforces `MIN_TWAMM_ORDER_AMOUNT = 1000` and `totalAmount >= durationSeconds` on initialized pools; settles streamed volume in `beforeSwap` (or via `TWAMMSwapExecutor` on `claimTWAMMOrder` / `cancelTWAMMOrder`) and refunds unswapped input + truncation dust. |
 | **Oracle** | Low | Fully permissionless | Truncated max tick delta per second (`100 * dt` in `int256` before clamping to `[MIN_TICK, MAX_TICK]`) to resist flash-loan TWAP manipulation without `int24` overflow. |
-| **JIT Guard** *(Expansion #18)* | Low | Immutable cooldown / early-exit penalty | Prevents same-block `addLiquidity -> donate -> removeLiquidity` MEV dilution; enforces `earlyExitPenaltyBps` on early removal. |
+| **JIT Guard** *(Expansion #18)* | Low | Immutable cooldown / hold floor | Tracks per-owner `lpTrackedLiquidity` and `lpAddedBlock` to prevent cross-account removal bypasses and 1-wei shared-router griefing; `jitExitPenaltyBps > 0` enforces a minimum 1-block hold floor. |
 | **Circuit Breaker** *(Expansion #19)* | Low | Immutable rolling tick band & window | Purely algorithmic rolling price-band guard; auto-resets after `windowSeconds` ($\le 24\text{h}$) so pools cannot be permanently frozen. |
-| **Referral Split** *(Expansion #20)* | Low | Immutable bps cap (`<= 300 bps`) | First-touch referrer binding with strict anti-self-referral check (`referrer != trader`) and pull-based ERC-6909 claims. |
-| **Vesting Sell Cap** *(Expansion #21)* | Low | Immutable daily epoch % cap | Enforces anti-honeypot floor (`maxDailySellBps >= 50` / `0.50%` per day) so selling can never be completely disabled. The epoch balance nets out open PoolManager deltas (no flash-loan inflation) and drops when tokens leave the wallet; sells through an untrusted router that holds no tokens are not capped rather than bricked. Per-wallet caps cannot stop a holder who splits tokens across wallets. One-sided liquidity adds are rejected on capped pools. |
-| **Auto Buyback** *(Expansion #22)* | Medium | Immutable bps cap (`<= 500 bps`) & floor tick | Accumulates swap fee slice inside pool-isolated reserve. `minBuybackReserve` is denominated in the quote currency; once reached below `triggerFloorTick`, both currency reserves move into the queued LP donation (see 3.7). |
+| **Referral Split** *(Expansion #20)* | Low | Immutable bps cap (`<= 300 bps`) | First-touch referrer binding with anti-self-referral and trusted-router exclusion checks, plus pull-based ERC-6909 claims. |
+| **Vesting Sell Cap** *(Expansion #21)* | Low | Immutable daily epoch % cap | Enforces anti-honeypot floor (`maxDailySellBps >= 50` / `0.50%`) and ceiling (`<= 5000` / `50%` per day). Stateless pass-through routers holding zero post-settlement tokens do not brick. |
+| **Auto Buyback** *(Expansion #22)* | Medium | Immutable bps cap (`<= 500 bps`) & floor tick | Accumulates swap fee slice inside pool-isolated reserve. Once `minBuybackReserve` in quote currency is reached and project token price drops to/beyond `triggerFloorTick`, both currency reserves move into `pendingLPDonation`. |
 
 ---
 

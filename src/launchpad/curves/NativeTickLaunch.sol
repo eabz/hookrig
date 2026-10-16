@@ -11,6 +11,8 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/utils/CurrencySettler.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ITokenLaunchpad} from "../../interfaces/ITokenLaunchpad.sol";
 import {IHookRigOrchestrator} from "../../interfaces/IHookRigOrchestrator.sol";
 
@@ -21,6 +23,9 @@ import {IHookRigOrchestrator} from "../../interfaces/IHookRigOrchestrator.sol";
 contract NativeTickLaunch is ITokenLaunchpad, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using CurrencySettler for Currency;
+    using SafeERC20 for IERC20;
+
+    address public constant DEAD_ADDRESS = 0x000000000000000000000000000000000000dEaD;
 
     IPoolManager public immutable poolManager;
     IHookRigOrchestrator public immutable hookOrchestrator;
@@ -99,6 +104,14 @@ contract NativeTickLaunch is ITokenLaunchpad, IUnlockCallback {
             }
             if (callerDelta.amount1() < 0) {
                 poolKey.currency1.settle(poolManager, address(this), uint256(uint128(-callerDelta.amount1())), false);
+            }
+        }
+
+        uint256 remToken = IERC20(projectToken).balanceOf(address(this));
+        if (remToken > 0) {
+            (bool ok,) = projectToken.call(abi.encodeWithSignature("burn(uint256)", remToken));
+            if (!ok) {
+                IERC20(projectToken).safeTransfer(DEAD_ADDRESS, remToken);
             }
         }
 

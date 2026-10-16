@@ -34,8 +34,11 @@ contract HoodiSwapRouter is IUnlockCallback {
     IPoolManager public immutable manager;
     address private _currentSender;
 
+    error InsufficientNativeValue(uint256 required, uint256 provided);
+
     struct SwapCallbackData {
         address sender;
+        uint256 msgValue;
         PoolKey key;
         SwapParams params;
         bytes hookData;
@@ -58,7 +61,11 @@ contract HoodiSwapRouter is IUnlockCallback {
         _currentSender = msg.sender;
         delta = abi.decode(
             manager.unlock(
-                abi.encode(SwapCallbackData({sender: msg.sender, key: key, params: params, hookData: hookData}))
+                abi.encode(
+                    SwapCallbackData({
+                        sender: msg.sender, msgValue: msg.value, key: key, params: params, hookData: hookData
+                    })
+                )
             ),
             (BalanceDelta)
         );
@@ -76,7 +83,11 @@ contract HoodiSwapRouter is IUnlockCallback {
         BalanceDelta delta = manager.swap(cb.key, cb.params, cb.hookData);
 
         if (delta.amount0() < 0) {
-            cb.key.currency0.settle(manager, cb.sender, uint256(uint128(-delta.amount0())), false);
+            uint256 settle0 = uint256(uint128(-delta.amount0()));
+            if (cb.key.currency0.isAddressZero() && cb.msgValue < settle0) {
+                revert InsufficientNativeValue(settle0, cb.msgValue);
+            }
+            cb.key.currency0.settle(manager, cb.sender, settle0, false);
         } else if (delta.amount0() > 0) {
             cb.key.currency0.take(manager, cb.sender, uint256(uint128(delta.amount0())), false);
         }
@@ -164,8 +175,9 @@ contract HoodiIntegrationScript is Script {
     }
 
     function run() external {
-        uint256 deployerPrivateKey =
-            vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
+        uint256 deployerPrivateKey = block.chainid == 31337
+            ? vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80))
+            : vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
 
         if (deployer.balance < 10 ether) {

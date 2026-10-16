@@ -76,7 +76,10 @@ library AntiSnipeLogic {
     ) external {
         HookRigBase.PoolRuntimeMeta storage meta = poolMeta[poolId];
         if (isExplicitGraduationCall) {
-            if (msg.sender != meta.authorizedCurve && msg.sender != launchpadFactory) {
+            bool isAuthorizedCurve =
+                meta.isLaunchpadPool && meta.authorizedCurve != address(0) && msg.sender == meta.authorizedCurve;
+            bool isAuthorizedFactory = launchpadFactory != address(0) && msg.sender == launchpadFactory;
+            if (!isAuthorizedCurve && !isAuthorizedFactory) {
                 revert HookRigBase.OnlyAuthorizedCurve(msg.sender);
             }
             if (meta.launchpadGraduated) {
@@ -95,6 +98,25 @@ library AntiSnipeLogic {
         }
         if ((bitmap & HookPermissionMasks.BIT_KING_OF_THE_POOL) != 0 && kingStates[poolId].roundDurationSeconds > 0) {
             kingStates[poolId].roundDeadline = uint64(block.timestamp + kingStates[poolId].roundDurationSeconds);
+        }
+    }
+
+    /// @notice Seeds or resets `startBlock` for `poolId` from an authorized launch curve or factory (`S2-F40`).
+    function seedAntiSnipeBlock(
+        mapping(PoolId => HookRigBase.PoolRuntimeMeta) storage poolMeta,
+        mapping(PoolId => AntiSnipeState) storage antiSnipeStates,
+        PoolId poolId,
+        address launchpadFactory
+    ) external {
+        HookRigBase.PoolRuntimeMeta storage meta = poolMeta[poolId];
+        bool isAuthorizedCurve =
+            meta.isLaunchpadPool && meta.authorizedCurve != address(0) && msg.sender == meta.authorizedCurve;
+        bool isAuthorizedFactory = launchpadFactory != address(0) && msg.sender == launchpadFactory;
+        if (!isAuthorizedCurve && !isAuthorizedFactory) {
+            revert HookRigBase.OnlyAuthorizedCurve(msg.sender);
+        }
+        if (antiSnipeStates[poolId].launchFee > 0) {
+            antiSnipeStates[poolId].startBlock = uint32(block.number);
         }
     }
 }

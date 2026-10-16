@@ -31,6 +31,27 @@ library AccessControlLogic {
     error TokenNotDeployed();
     error OneSidedLiquidityNotAllowed(PoolId poolId, int24 currentTick, int24 tickLower, int24 tickUpper);
     error UnauthorizedAccessControlManager(address caller);
+    error UnauthorizedPoolInitializer(address caller, address expectedAdmin);
+
+    /// @notice Validates that `sender` is authorized to initialize a registered pool (`S4-F02`).
+    /// @dev Launchpad pools require `sender == authorizedCurve` (or `orchestratorOwner` / factory when passed).
+    ///      Standard registered pools (`poolAdmin != address(0)`) require `sender == poolAdmin || sender == orchestratorOwner`,
+    ///      blocking third-party front-running of `PoolManager.initialize` with a manipulated starting `sqrtPriceX96`.
+    function verifyInitializer(
+        address sender,
+        address poolAdmin,
+        address orchestratorOwner,
+        bool isLaunchpadPool,
+        address authorizedCurve
+    ) external pure {
+        if (isLaunchpadPool) {
+            if (sender != authorizedCurve && sender != orchestratorOwner) {
+                revert IHookRigOrchestrator.UnauthorizedPoolInitializer(sender);
+            }
+        } else if (poolAdmin != address(0) && sender != poolAdmin && sender != orchestratorOwner) {
+            revert IHookRigOrchestrator.UnauthorizedPoolInitializer(sender);
+        }
+    }
 
     function checkValidTier3Bitmap(uint32 bitmap) external pure returns (bool) {
         return HookPermissionMasks.isValidTier3Bitmap(bitmap);
@@ -175,6 +196,12 @@ library AccessControlLogic {
         emit MerkleRootUpdated(poolId, newRoot);
     }
 
+    function _isTrustedRouter(address account) private view returns (bool) {
+        (bool ok, bytes memory data) =
+            address(this).staticcall(abi.encodeWithSignature("isTrustedRouter(address)", account));
+        return ok && data.length >= 32 && abi.decode(data, (bool));
+    }
+
     function verifyAccess(
         mapping(PoolId => IHookRigBlock.AccessControlParams) storage configs,
         mapping(PoolId => mapping(address => bool)) storage allowlisted,
@@ -182,10 +209,14 @@ library AccessControlLogic {
         address user,
         bytes calldata hookData,
         bool isAddLiquidity
-    ) external view {
+    ) public view {
         IHookRigBlock.AccessControlParams storage cfg = configs[poolId];
         if (isAddLiquidity && !cfg.checkBeforeAddLiquidity) return;
         if (!isAddLiquidity && !cfg.checkBeforeSwap) return;
+
+        if (_isTrustedRouter(user)) {
+            revert AccountNotAllowlisted(poolId, user);
+        }
 
         if (allowlisted[poolId][user]) return;
 
@@ -220,6 +251,52 @@ library AccessControlLogic {
         }
 
         revert AccountNotAllowlisted(poolId, user);
+    }
+
+    /// @notice Verifies pool access while rejecting self-attributed router callers (`sender == user` when
+    ///         `isTrustedSender` is true, or when an untrusted contract caller attempts to use a shared router
+    ///         identity) (`S4-L01`).
+    function verifyAccess(
+        mapping(PoolId => IHookRigBlock.AccessControlParams) storage configs,
+        mapping(PoolId => mapping(address => bool)) storage allowlisted,
+        PoolId poolId,
+        address sender,
+        address user,
+        bytes calldata hookData,
+        bool isAddLiquidity
+    ) external view {
+        IHookRigBlock.AccessControlParams storage cfg = configs[poolId];
+        if (isAddLiquidity && !cfg.checkBeforeAddLiquidity) return;
+        if (!isAddLiquidity && !cfg.checkBeforeSwap) return;
+
+        if (sender == user) {
+            revert AccountNotAllowlisted(poolId, user);
+        }
+
+        verifyAccess(configs, allowlisted, poolId, user, hookData, isAddLiquidity);
+    }
+
+    /// @notice Verifies pool access with explicit trusted-sender flag (`S4-L01`): prevents a trusted router whose
+    ///         `msgSender()` returns itself (`sender == user && isTrustedSender`) from acting as a shared allowlist identity.
+    function verifyAccess(
+        mapping(PoolId => IHookRigBlock.AccessControlParams) storage configs,
+        mapping(PoolId => mapping(address => bool)) storage allowlisted,
+        PoolId poolId,
+        address sender,
+        address user,
+        bool isTrustedSender,
+        bytes calldata hookData,
+        bool isAddLiquidity
+    ) external view {
+        IHookRigBlock.AccessControlParams storage cfg = configs[poolId];
+        if (isAddLiquidity && !cfg.checkBeforeAddLiquidity) return;
+        if (!isAddLiquidity && !cfg.checkBeforeSwap) return;
+
+        if (sender == user && isTrustedSender) {
+            revert AccountNotAllowlisted(poolId, user);
+        }
+
+        verifyAccess(configs, allowlisted, poolId, user, hookData, isAddLiquidity);
     }
 
     /// @notice Rejects liquidity adds whose range excludes the current tick on pools with per-wallet caps:
@@ -278,5 +355,27 @@ abstract contract AccessControlBlock is IHookRigBlock {
 
     function _verifyAccess(PoolId poolId, address user, bytes calldata hookData, bool isAddLiquidity) internal view {
         AccessControlLogic.verifyAccess(_accessConfigs, isAccountAllowlisted, poolId, user, hookData, isAddLiquidity);
+    }
+
+    function _verifyAccess(PoolId poolId, address sender, address user, bytes calldata hookData, bool isAddLiquidity)
+        internal
+        view
+    {
+        AccessControlLogic.verifyAccess(
+            _accessConfigs, isAccountAllowlisted, poolId, sender, user, hookData, isAddLiquidity
+        );
+    }
+
+    function _verifyAccess(
+        PoolId poolId,
+        address sender,
+        address user,
+        bool isTrustedSender,
+        bytes calldata hookData,
+        bool isAddLiquidity
+    ) internal view {
+        AccessControlLogic.verifyAccess(
+            _accessConfigs, isAccountAllowlisted, poolId, sender, user, isTrustedSender, hookData, isAddLiquidity
+        );
     }
 }

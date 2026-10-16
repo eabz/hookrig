@@ -38,6 +38,9 @@ library TransientContext {
         snap.tick = int24(uint24(packed >> 160));
         snap.blockNumber = uint32(packed >> 184);
         snap.active = ((packed >> 216) & 1) == 1;
+        if (snap.active && snap.blockNumber != uint32(block.number)) {
+            snap.active = false;
+        }
     }
 
     function setInternalHookExecution(PoolId poolId, bool active) internal {

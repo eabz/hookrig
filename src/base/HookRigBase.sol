@@ -57,16 +57,23 @@ abstract contract HookRigBase is
     mapping(PoolId poolId => mapping(Currency currency => mapping(address beneficiary => uint256 amount))) public
         poolClaims;
 
+    event LaunchpadFactoryUpdated(address indexed factory);
+
     error OnlyLaunchpadFactory(address caller);
     error OnlyAuthorizedCurve(address caller);
     error OnlyPoolAdmin(address caller);
+    error LaunchpadFactoryAlreadySet();
+    error ZeroAddressNotAllowed();
 
     constructor(IPoolManager _poolManager, address _initialOwner) BaseHook(_poolManager) Ownable(_initialOwner) {}
 
     receive() external payable {}
 
     function setLaunchpadFactory(address _factory) external onlyOwner {
+        if (_factory == address(0)) revert ZeroAddressNotAllowed();
+        if (launchpadFactory != address(0)) revert LaunchpadFactoryAlreadySet();
         launchpadFactory = _factory;
+        emit LaunchpadFactoryUpdated(_factory);
     }
 
     function setTrustedRouter(address router, bool trusted) external onlyOwner {

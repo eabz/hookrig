@@ -78,6 +78,16 @@ library DynamicFeeLogic {
         }
     }
 
+    /// @notice Computes the dynamic LP fee from prior-swap tick displacement and updates the EWMA volatility tracker.
+    /// @dev Observation model (`S4-F11`):
+    ///      - Because Uniswap v4 requires dynamic LP fees to be returned in `beforeSwap` (before the current swap
+    ///        executes and moves the pool tick), `compute` measures completed prior-swap tick displacement
+    ///        (`|currentTick - lastObservedTick|`) and pairs with `MEVProtectionBlock`, `ArbRecaptureBlock`, and
+    ///        `AntiSnipeBlock` to bound single-swap impact on fresh pools.
+    ///      - Within the same block (`block.number == state.lastUpdateBlock`), `rollingVolatilityTicks` only ratchets
+    ///        upward (`absDelta > state.rollingVolatilityTicks`) and `lastObservedTick` remains anchored at the
+    ///        block's initial tick, preventing an attacker from executing same-block zero-delta wash swaps to decay
+    ///        `rollingVolatilityTicks` back toward `baseFee`. Downward EWMA decay occurs only when advancing to a new block.
     function compute(mapping(PoolId => DynamicFeeState) storage states, PoolId poolId, int24 currentTick)
         public
         returns (uint24 fee)
@@ -110,6 +120,26 @@ library DynamicFeeLogic {
         uint256 feeRange = state.maxFee - state.baseFee;
         uint256 surcharge = Math.mulDiv(feeRange, state.rollingVolatilityTicks, threshold, Math.Rounding.Floor);
         fee = state.baseFee + uint24(surcharge);
+    }
+
+    /// @notice Optional post-swap volatility observation helper that ratchets `rollingVolatilityTicks` upward if
+    ///         a swap's `postSwapTick` displacement exceeds the current rolling volatility without decaying it.
+    function recordPostSwapTick(
+        mapping(PoolId => DynamicFeeState) storage states,
+        PoolId poolId,
+        int24 preSwapTick,
+        int24 postSwapTick
+    ) external {
+        DynamicFeeState storage state = states[poolId];
+        if (state.maxFee == 0) return;
+
+        int256 swapDelta = postSwapTick >= preSwapTick
+            ? int256(postSwapTick) - int256(preSwapTick)
+            : int256(preSwapTick) - int256(postSwapTick);
+        uint24 absDelta = uint24(uint256(swapDelta > 1000 ? int256(1000) : swapDelta));
+        if (absDelta > state.rollingVolatilityTicks) {
+            state.rollingVolatilityTicks = (state.rollingVolatilityTicks * 3 + absDelta + 3) / 4;
+        }
     }
 
     function resolveBeforeSwapFee(
@@ -158,6 +188,8 @@ library DynamicFeeLogic {
 /// @title DynamicFeeBlock
 /// @notice Group 1 (Fees) — Block #1: Volatility-responsive dynamic LP fee (`afterInitialize`, `beforeSwap`).
 /// @dev Trust Level: Low (purely algorithmic once initialized; bounded by MAX_DYNAMIC_FEE = 50_000 = 5%).
+///      Observes completed prior-swap tick displacement in `beforeSwap` and prevents same-block zero-delta wash
+///      swaps from decaying `rollingVolatilityTicks` (`S4-F11`).
 abstract contract DynamicFeeBlock is IHookRigBlock {
     mapping(PoolId poolId => DynamicFeeLogic.DynamicFeeState state) internal _dynamicFeeStates;
 
@@ -174,5 +206,10 @@ abstract contract DynamicFeeBlock is IHookRigBlock {
     /// @notice Computes the dynamic LP fee and updates the truncated EMA tick volatility tracker.
     function _computeDynamicFee(PoolId poolId, int24 currentTick) internal returns (uint24 fee) {
         return DynamicFeeLogic.compute(_dynamicFeeStates, poolId, currentTick);
+    }
+
+    /// @notice Records post-swap tick displacement to ratchet intra-block volatility upward without decaying it.
+    function _recordDynamicFeePostSwapTick(PoolId poolId, int24 preSwapTick, int24 postSwapTick) internal {
+        DynamicFeeLogic.recordPostSwapTick(_dynamicFeeStates, poolId, preSwapTick, postSwapTick);
     }
 }

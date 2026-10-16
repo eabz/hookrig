@@ -17,17 +17,17 @@ Rather than writing custom token, proxy, or math primitives from scratch, the `h
 | **Bonding Curve Math** | `@openzeppelin/contracts/utils/math/Math.sol` (`mulDiv`) & `SafeCast.sol` | 512-bit intermediate precision `mulDiv` with explicit `Math.Rounding.Floor` (tokens out) and `Math.Rounding.Ceil` (quote in) to prevent Bunni-style rounding drains. |
 | **v4 Curve & Settlement** | `@openzeppelin/uniswap-hooks/base/BaseCustomCurve.sol`<br>`@openzeppelin/uniswap-hooks/utils/CurrencySettler.sol` | Audited delta settlement (`sync`, `take`, `settle`) handling both ERC-20 quote tokens (USDC) and Native ETH (`CurrencyLibrary.ADDRESS_ZERO`). |
 | **Reentrancy & Locks** | `@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol` | EIP-1153 transient reentrancy lock protecting curve `buy()`, `sell()`, and `graduate()` transitions. |
-| **Creator / Team Vesting** | `@openzeppelin/contracts/finance/VestingWallet.sol` | Audited linear/cliff vesting vault for optional creator/team allocations (capped at `creatorVestingBps <= 2000` / $20\%$, starting after a mandatory `1 hour` post-launch cliff so vested tokens cannot be dumped into an active bonding curve). |
+| **Creator / Team Vesting** | `LaunchpadVestingWallet` (extends `@openzeppelin/contracts/finance/VestingWallet.sol`) | Audited linear vesting vault for optional creator/team allocations (capped at `creatorVestingBps <= 2000` / $20\%$, with `release()` gated until the launch curve graduates or full vesting duration elapses so vested tokens can never be dumped into an active bonding curve). |
 | **Allowlist / Presale** | `@openzeppelin/contracts/utils/cryptography/MerkleProof.sol` | Audited Merkle verification when launching with the `Access control` block. |
 | **v4 Pool & LP Seeding** | `Uniswap/v4-core` (`PoolManager`) & `v4-periphery` (`PositionManager`, `TickMath`, `SqrtPriceMath`) | Official Uniswap v4 math and liquidity seeding primitives for atomic graduation. |
 
 ---
 
-## 2. Deterministic Token Address Mining (Token Sorting Invariant)
+## 2. Deterministic Token Address Mining (`predictTokenAddressFor`)
 
 In Uniswap v4, every `PoolKey` requires `Currency.unwrap(currency0) < Currency.unwrap(currency1)`.
 - When launching a token against Native ETH (`address(0)`), ETH is **always** `currency0` and the launched `HookRigToken` is **always** `currency1`.
-- When launching a token against an ERC-20 quote asset (e.g., `USDC` or `WETH`), `LaunchpadFactory` uses `Create2` salt mining so the deployed `HookRigToken` is deterministically placed as `currency1` (`tokenAddress > quoteAddress`).
+- When launching a token against an ERC-20 quote asset (e.g., `USDC` or `WETH`), `LaunchpadFactory` derives the actual `CREATE2` salt as `keccak256(abi.encode(deployer, userSalt))` (preventing cross-sender front-running of mined salts) and provides both `predictTokenAddress(meta, salt)` (for `msg.sender`) and `predictTokenAddressFor(meta, salt, deployer)` so the deployed `HookRigToken` is deterministically placed as `currency1` (`tokenAddress > quoteAddress`).
 - **Why this matters**: Standardizing the launched project token as `currency1` makes `zeroForOne == true` universally represent a **Buy** (spending `currency0` quote to receive `currency1` project token) and `zeroForOne == false` universally represent a **Sell**.
 
 ---

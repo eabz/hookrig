@@ -5,6 +5,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -21,6 +22,31 @@ import {HookRigToken} from "./HookRigToken.sol";
 import {VirtualXYKLaunch} from "./curves/VirtualXYKLaunch.sol";
 import {SteppedTrancheLaunch} from "./curves/SteppedTrancheLaunch.sol";
 import {NativeTickLaunch} from "./curves/NativeTickLaunch.sol";
+
+interface ILaunchCurveState {
+    function launchState() external view returns (ITokenLaunchpad.LaunchState);
+}
+
+/// @notice Creator vesting wallet that prevents releasing tokens while the launchpad bonding curve is still active.
+contract LaunchpadVestingWallet is VestingWallet {
+    address public immutable curve;
+
+    constructor(address beneficiary, uint64 startTimestamp, uint64 durationSeconds, address _curve)
+        VestingWallet(beneficiary, startTimestamp, durationSeconds)
+    {
+        curve = _curve;
+    }
+
+    function vestedAmount(address token, uint64 timestamp) public view override returns (uint256) {
+        if (
+            curve != address(0) && timestamp < end()
+                && ILaunchCurveState(curve).launchState() != ITokenLaunchpad.LaunchState.Graduated
+        ) {
+            return 0;
+        }
+        return super.vestedAmount(token, timestamp);
+    }
+}
 
 /// @title LaunchpadFactory
 /// @notice Unified Token Launchpad Factory for HookRig using EIP-1167 Minimal Proxies (`Clones`):
@@ -120,7 +146,7 @@ contract LaunchpadFactory is ITokenLaunchpad {
             trancheConfig.numTranches == 0 || trancheConfig.basePriceQ96 == 0
                 || trancheConfig.graduationQuoteTarget == 0 || trancheConfig.curveTokenAllocation == 0
                 || trancheConfig.lpTokenReserve == 0 || trancheConfig.antiSnipeSurchargeBps >= 10_000
-                || trancheConfig.surchargeToKingPotBps > 10_000
+                || trancheConfig.surchargeToKingPotBps > 10_000 || trancheConfig.antiSnipeBlocks > 50_400
         ) {
             revert InvalidCurveConfiguration();
         }
@@ -160,14 +186,42 @@ contract LaunchpadFactory is ITokenLaunchpad {
     ) external returns (address token, address curve, PoolKey memory key) {
         hookContract = _resolveHook(hookContract);
         _validateWalletCapAlignment(stackConfig, 0);
-        if (nativeConfig.bands.length == 0) {
+        if (
+            nativeConfig.bands.length == 0 || nativeConfig.initialSqrtPriceX96 < TickMath.MIN_SQRT_PRICE
+                || nativeConfig.initialSqrtPriceX96 >= TickMath.MAX_SQRT_PRICE
+        ) {
             revert InvalidCurveConfiguration();
         }
+
+        int24 spacing = nativeConfig.tickSpacing > 0 ? nativeConfig.tickSpacing : int24(60);
+        if (spacing > TickMath.MAX_TICK_SPACING) {
+            revert InvalidCurveConfiguration();
+        }
+        int24 startingTick = TickMath.getTickAtSqrtPrice(nativeConfig.initialSqrtPriceX96);
 
         uint256 availableSupply = _computeAvailableCurveSupply(meta);
         uint256 totalBandTokens = 0;
         for (uint256 i = 0; i < nativeConfig.bands.length; i++) {
-            totalBandTokens += nativeConfig.bands[i].tokenAmount;
+            NativeTickBand calldata band = nativeConfig.bands[i];
+            if (band.tokenAmount == 0) continue;
+            if (
+                band.tickLower >= band.tickUpper || band.tickLower < TickMath.MIN_TICK
+                    || band.tickUpper > TickMath.MAX_TICK || band.tickLower % spacing != 0
+                    || band.tickUpper % spacing != 0 || band.tickUpper > startingTick
+            ) {
+                revert InvalidCurveConfiguration();
+            }
+            uint160 sqrtPriceLowerX96 = TickMath.getSqrtPriceAtTick(band.tickLower);
+            uint160 sqrtPriceUpperX96 = TickMath.getSqrtPriceAtTick(band.tickUpper);
+            uint128 liq =
+                LiquidityAmounts.getLiquidityForAmount1(sqrtPriceLowerX96, sqrtPriceUpperX96, band.tokenAmount);
+            if (liq == 0) {
+                revert InvalidCurveConfiguration();
+            }
+            totalBandTokens += band.tokenAmount;
+        }
+        if (totalBandTokens == 0) {
+            revert InvalidCurveConfiguration();
         }
         if (totalBandTokens > availableSupply) {
             revert InsufficientCurveTokenSupply(totalBandTokens, availableSupply);
@@ -195,6 +249,11 @@ contract LaunchpadFactory is ITokenLaunchpad {
         return hookContract;
     }
 
+    /// @dev Resolves a zero `creator` to `msg.sender` so `poolAdmin` is never stranded on the stateless factory.
+    function _resolveCreator(address creator) internal view returns (address) {
+        return creator != address(0) ? creator : msg.sender;
+    }
+
     /// @dev Rejects launch stacks that let a creator trap curve buyers after graduation: AccessControl (only
     ///      allowlisted traders could sell) and an AntiSnipe launch fee above the aggregate cut budget.
     function _validateLaunchStack(IHookRigOrchestrator.PoolStackConfig memory stackConfig) internal pure {
@@ -216,22 +275,20 @@ contract LaunchpadFactory is ITokenLaunchpad {
         uint32 resolvedBitmap = HookPermissionMasks.getPresetBitmap(stackConfig.presetId)
         | stackConfig.enabledBlocksBitmap;
         if ((resolvedBitmap & HookPermissionMasks.BIT_WALLET_CAP) != 0) {
-            uint16 effectivePoolCapBps =
-                stackConfig.walletCap.maxWalletBps > 0 ? stackConfig.walletCap.maxWalletBps : 200;
-            if (curveWalletCapBps > 0 && effectivePoolCapBps < curveWalletCapBps) {
-                revert PostGraduationWalletCapBelowCurveCap(stackConfig.walletCap.maxWalletBps, curveWalletCapBps);
-            }
             if (stackConfig.walletCap.maxWalletBps == 0) {
-                stackConfig.walletCap.maxWalletBps = 200;
+                stackConfig.walletCap.maxWalletBps = curveWalletCapBps > 0 ? curveWalletCapBps : 200;
+            } else if (curveWalletCapBps > stackConfig.walletCap.maxWalletBps) {
+                revert PostGraduationWalletCapBelowCurveCap(stackConfig.walletCap.maxWalletBps, curveWalletCapBps);
             }
         }
     }
 
-    function _computeAvailableCurveSupply(LaunchTokenMetadata calldata meta) internal pure returns (uint256) {
+    function _computeAvailableCurveSupply(LaunchTokenMetadata calldata meta) internal view returns (uint256) {
         if (meta.creatorVestingBps > MAX_CREATOR_VESTING_BPS) {
             revert CreatorVestingExceedsCap(meta.creatorVestingBps);
         }
-        uint256 vestingAmount = (meta.creatorVestingBps > 0 && meta.creator != address(0))
+        address creator = _resolveCreator(meta.creator);
+        uint256 vestingAmount = (meta.creatorVestingBps > 0 && creator != address(0))
             ? Math.mulDiv(meta.totalSupply, meta.creatorVestingBps, 10_000, Math.Rounding.Floor)
             : 0;
         return meta.totalSupply - vestingAmount;
@@ -281,7 +338,7 @@ contract LaunchpadFactory is ITokenLaunchpad {
         if (tickSpacing > TickMath.MAX_TICK_SPACING) revert InvalidCurveConfiguration();
         _validateLaunchStack(stackConfig);
         token = _deployTokenAndVest(meta, Currency.unwrap(quoteCurrency), curve, salt);
-        address creator = meta.creator;
+        address creator = _resolveCreator(meta.creator);
 
         // Because `token > quoteAddr`, `currency0` is always `quoteCurrency` and `currency1` is always `token`
         stackConfig.isToken0ProjectToken = false;
@@ -319,12 +376,14 @@ contract LaunchpadFactory is ITokenLaunchpad {
             revert SaltDoesNotSortTokenAsCurrency1(token, quoteAddr);
         }
 
-        // Handle optional creator vesting slice via OpenZeppelin VestingWallet (min 30 days — SA-18)
+        // Handle optional creator vesting slice via LaunchpadVestingWallet (min 30 days — SA-18)
+        address creator = _resolveCreator(meta.creator);
         uint256 vestingAmount = 0;
-        if (meta.creatorVestingBps > 0 && meta.creator != address(0)) {
+        if (meta.creatorVestingBps > 0 && creator != address(0)) {
             vestingAmount = Math.mulDiv(meta.totalSupply, meta.creatorVestingBps, 10_000, Math.Rounding.Floor);
             uint64 duration = meta.vestingDurationSeconds >= 30 days ? meta.vestingDurationSeconds : 180 days;
-            VestingWallet vest = new VestingWallet(meta.creator, uint64(block.timestamp + 1 hours), duration);
+            LaunchpadVestingWallet vest =
+                new LaunchpadVestingWallet(creator, uint64(block.timestamp + 1 hours), duration, curve);
             tokenToCreatorVesting[token] = address(vest);
             IERC20(token).safeTransfer(address(vest), vestingAmount);
         }

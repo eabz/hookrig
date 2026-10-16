@@ -104,15 +104,14 @@ library BuySellTaxLogic {
         if (newBuyTaxBps > cfg.buyTaxBps || newSellTaxBps > cfg.sellTaxBps) {
             revert TaxIncreaseForbiddenInDecayOnlyMode();
         }
-        if ((newBuyTaxBps > 0 || newSellTaxBps > 0) && newRecipient == address(0)) {
+        address effectiveRecipient = newRecipient != address(0) ? newRecipient : cfg.taxRecipient;
+        if ((newBuyTaxBps > 0 || newSellTaxBps > 0) && effectiveRecipient == address(0)) {
             revert InvalidTaxRecipient();
         }
         cfg.buyTaxBps = newBuyTaxBps;
         cfg.sellTaxBps = newSellTaxBps;
-        if (newRecipient != address(0)) {
-            cfg.taxRecipient = newRecipient;
-        }
-        emit BuySellTaxUpdated(poolId, newBuyTaxBps, newSellTaxBps, cfg.taxRecipient);
+        cfg.taxRecipient = effectiveRecipient;
+        emit BuySellTaxUpdated(poolId, newBuyTaxBps, newSellTaxBps, effectiveRecipient);
     }
 
     function validateTaxBudget(

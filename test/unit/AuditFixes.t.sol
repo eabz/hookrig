@@ -394,4 +394,149 @@ contract AuditFixesTest is HookRigTestBase {
         vm.expectRevert(abi.encodeWithSelector(IHookRigOrchestrator.InvalidBlockBitmap.selector, bitmap));
         DeepLiquidityPresetHook(payable(presetAddr)).registerPoolStack(_defaultPoolKey(IHooks(presetAddr)), cfg);
     }
+
+    // =========================================================================
+    // TODO-14..TODO-29 Audit Remediation Regression Tests
+    // =========================================================================
+
+    function test_Fix_AutoBuyback_FloorTriggerBothTokenOrders() public {
+        // Case A: isToken0ProjectToken == true (price drop moves tick DOWN <= triggerFloorTick)
+        IHookRigBlock.PoolStackConfig memory cfg0;
+        cfg0.isToken0ProjectToken = true;
+        cfg0.enabledBlocksBitmap = HookPermissionMasks.BIT_AUTO_BUYBACK;
+        cfg0.autoBuyback =
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 300, triggerFloorTick: -50, minBuybackReserve: 1 ether});
+        (PoolKey memory key0, PoolId pid0) = _initPoolWithStack(cfg0);
+        _seedFullRangeLiquidity(key0, 500_000 ether);
+
+        // Small sell of token0 (zeroForOne == true) keeps tick > -50 -> accumulates currency1 quote reserve
+        _swapExactIn(alice, key0, true, 1000 ether, "");
+        assertEq(orchestrator.pendingLPDonation(pid0, currency1), 0);
+
+        // Larger sell of token0 pushes tick <= -50 -> triggers floor defense in currency1!
+        _swapExactIn(bob, key0, true, 20_000 ether, "");
+        assertGt(orchestrator.pendingLPDonation(pid0, currency1), 0);
+
+        // Case B: isToken0ProjectToken == false (price drop moves tick UP >= triggerFloorTick)
+        IHookRigBlock.PoolStackConfig memory cfg1;
+        cfg1.isToken0ProjectToken = false;
+        cfg1.enabledBlocksBitmap = HookPermissionMasks.BIT_AUTO_BUYBACK;
+        cfg1.autoBuyback =
+            IHookRigBlock.AutoBuybackParams({buybackFeeBps: 300, triggerFloorTick: 50, minBuybackReserve: 1 ether});
+        PoolKey memory key1 = key0;
+        key1.tickSpacing = 120;
+        orchestrator.registerPoolStack(key1, cfg1);
+        poolManager.initialize(key1, SQRT_PRICE_1_1);
+        _seedFullRangeLiquidity(key1, 500_000 ether);
+        PoolId pid1 = key1.toId();
+
+        // Small sell of token1 (zeroForOne == false) keeps tick < 50 -> accumulates currency0 quote reserve
+        _swapExactIn(alice, key1, false, 1000 ether, "");
+        assertEq(orchestrator.pendingLPDonation(pid1, currency0), 0);
+
+        // Larger sell of token1 pushes tick >= 50 -> triggers floor defense in currency0!
+        _swapExactIn(bob, key1, false, 20_000 ether, "");
+        assertGt(orchestrator.pendingLPDonation(pid1, currency0), 0);
+    }
+
+    function test_Fix_SetLaunchpadFactory_OneTimeLockAndStandardPoolInitAuth() public {
+        // 1. setLaunchpadFactory is already set in setUp() -> cannot be overwritten or set to zero (TODO-15)
+        vm.prank(owner);
+        vm.expectRevert();
+        orchestrator.setLaunchpadFactory(address(0xBEEF));
+
+        vm.prank(owner);
+        vm.expectRevert();
+        orchestrator.setLaunchpadFactory(address(0));
+
+        // 2. Registered standard pool can only be initialized by poolAdmin or orchestrator owner (TODO-23)
+        IHookRigBlock.PoolStackConfig memory cfg;
+        cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_DYNAMIC_FEE;
+        cfg.dynamicFee = IHookRigBlock.DynamicFeeParams({baseFee: 3000, maxFee: 10_000, volatilityTickThreshold: 50});
+        cfg.poolAdmin = alice;
+
+        PoolKey memory key = _defaultPoolKey(IHooks(address(orchestrator)));
+        vm.prank(alice);
+        orchestrator.registerPoolStack(key, cfg);
+
+        // Attacker Bob cannot front-run poolManager.initialize with a corrupted price
+        vm.prank(bob);
+        vm.expectRevert();
+        poolManager.initialize(key, SQRT_PRICE_1_1);
+
+        // PoolAdmin Alice initializes cleanly
+        vm.prank(alice);
+        poolManager.initialize(key, SQRT_PRICE_1_1);
+    }
+
+    function test_Fix_UntrustedRouterGuards_WalletCap_King_Referral() public {
+        IHookRigBlock.PoolStackConfig memory cfg;
+        cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_WALLET_CAP | HookPermissionMasks.BIT_KING_OF_THE_POOL
+            | HookPermissionMasks.BIT_REFERRAL_SPLIT;
+        cfg.walletCap = IHookRigBlock.WalletCapParams({maxWalletBps: 5000, sunsetBlocks: 100});
+        cfg.kingOfThePool = IHookRigBlock.KingOfThePoolParams({
+            potFeeOnBuyBps: 200, roundDurationSeconds: 600, minBuyAmountForReset: 10 ether
+        });
+        cfg.referralSplit = IHookRigBlock.ReferralSplitParams({referralFeeBps: 100});
+
+        (PoolKey memory key, PoolId poolId) = _initPoolWithStack(cfg);
+        _seedFullRangeLiquidity(key, 500_000 ether);
+
+        // 1. Trusted router cannot be registered as a referrer (TODO-24)
+        vm.prank(alice);
+        vm.expectRevert();
+        orchestrator.registerReferrer(poolId, address(router));
+
+        // 2. Untrusted router is blocked from buying while WalletCap is active (TODO-24)
+        vm.prank(owner);
+        orchestrator.setTrustedRouter(address(router), false);
+        vm.expectRevert();
+        _swapExactIn(alice, key, true, 100 ether, "");
+
+        // 3. After WalletCap sunset, untrusted router can swap, contributes to King pot, but NEVER steals King crown!
+        vm.roll(block.number + 101);
+        _swapExactIn(alice, key, true, 100 ether, "");
+        (, address king, uint256 pot,) = orchestrator.getCurrentKing(poolId);
+        assertGt(pot, 0);
+        assertEq(king, address(0), "untrusted router must not be crowned King");
+    }
+
+    function test_Fix_LimitOrders_BucketEpochPrevents1WeiClaimDenial() public {
+        (PoolKey memory key,) = _limitOrderPool();
+
+        // Alice places a 50 ether limit order at tick -60
+        vm.prank(alice);
+        uint256 aliceOrder = orchestrator.placeLimitOrder(key, -60, true, 50 ether);
+
+        // Swap crosses tick -60 -> bucket is filled (epoch 0)
+        _swapExactIn(bob, key, true, 25_000 ether, "");
+
+        // Swap moves price back above tick -60
+        _swapExactIn(bob, key, false, 30_000 ether, "");
+
+        // Attacker Carol places a 1-wei order at tick -60 to re-open the bucket into epoch 1
+        vm.prank(carol);
+        orchestrator.placeLimitOrder(key, -60, true, 1);
+
+        // Alice's earlier filled order from epoch 0 is STILL claimable! (TODO-20 / S4-L13)
+        uint256 balBefore = token1.balanceOf(alice);
+        vm.prank(alice);
+        orchestrator.claimLimitOrder(key, aliceOrder);
+        assertGt(token1.balanceOf(alice), balBefore);
+    }
+
+    function test_Fix_ManagedFee_StagingBeforePoolInit() public {
+        IHookRigBlock.PoolStackConfig memory cfg;
+        cfg.enabledBlocksBitmap = HookPermissionMasks.BIT_MANAGED_FEE;
+        cfg.managedFee = IHookRigBlock.ManagedFeeParams({startingFee: 3000, feeCap: 10_000, manager: alice});
+
+        PoolKey memory key = _defaultPoolKey(IHooks(address(orchestrator)));
+        orchestrator.registerPoolStack(key, cfg);
+
+        // Manager Alice can update the staged fee BEFORE poolManager.initialize without reverting (TODO-29 / S2-F45)
+        vm.prank(alice);
+        orchestrator.setManagedPoolFee(key, 4500);
+
+        poolManager.initialize(key, SQRT_PRICE_1_1);
+    }
 }

@@ -4,7 +4,12 @@ pragma solidity ^0.8.26;
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IHookRigBlock} from "../../interfaces/IHookRigBlock.sol";
+
+interface IHasPoolManager {
+    function poolManager() external view returns (IPoolManager);
+}
 
 library ManagedFeeLogic {
     uint24 internal constant MAX_MANAGED_FEE_CAP = 50_000; // 5.00%
@@ -39,6 +44,7 @@ library ManagedFeeLogic {
 
     function update(mapping(PoolId => ManagedFeeState) storage states, PoolId poolId, address caller, uint24 newFee)
         external
+        returns (bool poolInitialized)
     {
         ManagedFeeState storage state = states[poolId];
         if (caller != state.manager) revert UnauthorizedFeeManager(caller);
@@ -47,6 +53,12 @@ library ManagedFeeLogic {
         uint24 oldFee = state.currentFee;
         state.currentFee = newFee;
         emit ManagedFeeUpdated(poolId, oldFee, newFee, caller);
+
+        IPoolManager pm = IHasPoolManager(address(this)).poolManager();
+        if (address(pm) != address(0)) {
+            (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(pm, poolId);
+            poolInitialized = sqrtPriceX96 != 0;
+        }
     }
 }
 
@@ -69,10 +81,14 @@ abstract contract ManagedFeeBlock is IHookRigBlock {
         manager.updateDynamicLPFee(key, _managedFeeStates[poolId].currentFee);
     }
 
+    /// @notice Updates the managed LP fee for `key` (`S2-F45`).
+    /// @dev Only syncs `PoolManager.updateDynamicLPFee` when the pool has already been initialized (`sqrtPriceX96 != 0`);
+    ///      if called before `PoolManager.initialize`, the updated fee is stored in `_managedFeeStates[poolId].currentFee`
+    ///      and applied during `afterInitialize`.
     function setManagedPoolFee(PoolKey calldata key, uint24 newFee) external {
-        PoolId poolId = key.toId();
-        ManagedFeeLogic.update(_managedFeeStates, poolId, msg.sender, newFee);
-        _updatePoolManagerDynamicFee(key, newFee);
+        if (ManagedFeeLogic.update(_managedFeeStates, key.toId(), msg.sender, newFee)) {
+            _updatePoolManagerDynamicFee(key, newFee);
+        }
     }
 
     function _getManagedFee(PoolId poolId) internal view returns (uint24) {
