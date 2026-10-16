@@ -98,13 +98,13 @@ contract LimitOrderSwapExecutor is IUnlockCallback, IMsgSender {
             cb.key.currency1.take(poolManager, cb.recipient, uint256(uint128(delta.amount1())), false);
         }
 
+        int128 inDelta = cb.zeroForOne ? delta.amount0() : delta.amount1();
         int128 outDelta = cb.zeroForOne ? delta.amount1() : delta.amount0();
+        uint256 actualIn = inDelta < 0 ? uint256(uint128(-inDelta)) : 0;
         uint256 outputAmount = outDelta > 0 ? uint256(uint128(outDelta)) : 0;
 
         Currency inputCurrency = cb.zeroForOne ? cb.key.currency0 : cb.key.currency1;
-        uint256 leftover = inputCurrency.isAddressZero()
-            ? address(this).balance
-            : IERC20(Currency.unwrap(inputCurrency)).balanceOf(address(this));
+        uint256 leftover = cb.inputAmount > actualIn ? uint256(cb.inputAmount) - actualIn : 0;
         if (leftover > 0) {
             inputCurrency.transfer(cb.recipient, leftover);
         }
@@ -135,6 +135,7 @@ library LimitOrdersLogic {
 
     struct LimitOrderBucket {
         uint128 totalInputAmount;
+        uint128 epochInputAmount;
         uint128 filledOutputAmount;
         bool filled;
         uint64 epoch;
@@ -193,13 +194,14 @@ library LimitOrdersLogic {
 
         LimitOrderBucket storage bucket = buckets[poolId][targetTick][zeroForOne];
         if (bucket.filled) {
-            if (bucket.totalInputAmount == 0) {
+            if (bucket.epochInputAmount == 0) {
                 bucket.filled = false;
                 bucket.epoch++;
             } else {
                 (, int24 currentTick,,) = StateLibrary.getSlot0(IHasPoolManager(address(this)).poolManager(), poolId);
                 if (zeroForOne ? currentTick > targetTick : currentTick < targetTick) {
                     bucket.filled = false;
+                    bucket.epochInputAmount = 0;
                     bucket.epoch++;
                 } else {
                     revert BucketAlreadyFilled(orderId);
@@ -230,6 +232,7 @@ library LimitOrdersLogic {
         });
 
         bucket.totalInputAmount += inputAmount;
+        bucket.epochInputAmount += inputAmount;
 
         emit LimitOrderPlaced(orderId, poolId, msg.sender, targetTick, zeroForOne, inputAmount);
     }
@@ -251,9 +254,12 @@ library LimitOrdersLogic {
         LimitOrderBucket storage bucket = buckets[order.poolId][order.targetTick][order.zeroForOne];
         order.claimedOrCancelled = true;
         bucket.totalInputAmount -= order.inputAmount;
-        if (bucket.totalInputAmount == 0 && bucket.filled) {
-            bucket.filled = false;
-            bucket.epoch++;
+        if (order.epoch == bucket.epoch) {
+            bucket.epochInputAmount -= order.inputAmount;
+            if (bucket.epochInputAmount == 0 && bucket.filled) {
+                bucket.filled = false;
+                bucket.epoch++;
+            }
         }
 
         Currency inputCurrency = order.zeroForOne ? key.currency0 : key.currency1;
@@ -297,9 +303,12 @@ library LimitOrdersLogic {
 
             order.claimedOrCancelled = true;
             bucket.totalInputAmount -= order.inputAmount;
-            if (bucket.totalInputAmount == 0 && bucket.filled) {
-                bucket.filled = false;
-                bucket.epoch++;
+            if (order.epoch == bucket.epoch) {
+                bucket.epochInputAmount -= order.inputAmount;
+                if (bucket.epochInputAmount == 0 && bucket.filled) {
+                    bucket.filled = false;
+                    bucket.epoch++;
+                }
             }
         }
 
@@ -366,6 +375,7 @@ library LimitOrdersLogic {
         int24 step = tickSpacing;
         uint256 stepsChecked = 0;
 
+        int24 lastProcessedTick = postSwapTick;
         if (movedUp) {
             int24 rem = prevTick % step;
             int24 aligned = rem == 0 ? prevTick : (rem > 0 ? prevTick + (step - rem) : prevTick - rem);
@@ -373,10 +383,13 @@ library LimitOrdersLogic {
             for (; t <= postSwapTick && stepsChecked < MAX_TICK_FILLS_PER_SWAP; t += step) {
                 stepsChecked++;
                 LimitOrderBucket storage b = buckets[poolId][t][false];
-                if (b.totalInputAmount > 0 && !b.filled) {
+                if (b.epochInputAmount > 0 && !b.filled) {
                     b.filled = true;
-                    emit LimitOrderTickCrossed(poolId, t, false, b.totalInputAmount);
+                    emit LimitOrderTickCrossed(poolId, t, false, b.epochInputAmount);
                 }
+            }
+            if (t <= postSwapTick) {
+                lastProcessedTick = t - step;
             }
         } else {
             int24 rem = prevTick % step;
@@ -385,14 +398,17 @@ library LimitOrdersLogic {
             for (; t >= postSwapTick && stepsChecked < MAX_TICK_FILLS_PER_SWAP; t -= step) {
                 stepsChecked++;
                 LimitOrderBucket storage b = buckets[poolId][t][true];
-                if (b.totalInputAmount > 0 && !b.filled) {
+                if (b.epochInputAmount > 0 && !b.filled) {
                     b.filled = true;
-                    emit LimitOrderTickCrossed(poolId, t, true, b.totalInputAmount);
+                    emit LimitOrderTickCrossed(poolId, t, true, b.epochInputAmount);
                 }
+            }
+            if (t >= postSwapTick) {
+                lastProcessedTick = t + step;
             }
         }
 
-        lastTicks[poolId] = postSwapTick;
+        lastTicks[poolId] = lastProcessedTick;
     }
 }
 

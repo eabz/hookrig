@@ -133,13 +133,12 @@ library WalletCapLogic {
             }
             enforceAfterBuy(states, poolId, projectCurrency, trader, netTokensToBuyer, traderIsSender);
         } else {
-            uint256 sold = isExactInput ? settledSpecifiedAmount : (grossUnspecifiedAmount + totalCutAmount);
             address token = Currency.unwrap(projectCurrency);
             uint256 prevExpected = TransientContext.getWalletCapExpectedBalance(token, trader);
             if (prevExpected == 0 && !projectCurrency.isAddressZero()) {
                 prevExpected = IERC20(Currency.unwrap(projectCurrency)).balanceOf(trader);
             }
-            TransientContext.setWalletCapExpectedBalance(token, trader, prevExpected > sold ? prevExpected - sold : 0);
+            TransientContext.setWalletCapExpectedBalance(token, trader, prevExpected);
         }
     }
 }

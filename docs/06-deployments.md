@@ -81,13 +81,13 @@ All deployable contracts compile with `solc 0.8.26` (`evm_version = "cancun"`, `
 
 | Contract | Runtime Size (Bytes) | EIP-170 Margin (Bytes) |
 | :--- | :---: | :---: |
-| **`HookRigOrchestrator`** | `24,497` | `79` |
-| **12 Preset Hooks (`FairLaunchPresetHook` – `ProTradingPoolPresetHook`)** | `24,517` – `24,519` | `57` – `59` |
+| **`HookRigOrchestrator`** | `24,246` | `330` |
+| **12 Preset Hooks (`FairLaunchPresetHook` – `ProTradingPoolPresetHook`)** | `24,266` – `24,268` | `308` – `310` |
+| **`LaunchpadFactory`** | `21,997` | `2,579` |
+| **`SteppedTrancheLaunch`** | `12,709` | `11,867` |
 | **`VirtualXYKLaunch`** | `8,571` | `16,005` |
-| **`SteppedTrancheLaunch`** | `8,452` | `16,124` |
-| **`LaunchpadFactory`** | `7,453` | `17,123` |
-| **`NativeTickLaunch`** | `3,103` | `21,473` |
-| **`HookRigToken`** | `2,226` | `22,350` |
+| **`NativeTickLaunch`** | `6,705` | `17,871` |
+| **`HookRigToken`** | `3,763` | `20,813` |
 
 ---
 

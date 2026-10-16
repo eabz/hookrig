@@ -38,12 +38,9 @@ library ArbRecaptureLogic {
     /// @notice Computes the arbitrage recapture cut (in bps) from single-swap or cumulative intra-block tick movement.
     /// @dev `referenceTick` anchoring semantics:
     ///      - At the start of a new block (`block.number > state.lastUpdatedBlock`), `referenceTick` is anchored to `preSwapTick`.
-    ///      - Within the same block, sub-threshold swaps (`tickMoved <= arbTriggerTickDelta` or `rawCutBps == 0`)
-    ///        deliberately DO NOT advance `referenceTick`. Keeping `referenceTick` anchored across sub-threshold steps
-    ///        prevents an arbitrageur from splitting a large dislocation trade into multiple smaller sub-threshold swaps
-    ///        within the same block to evade arbitrage recapture.
-    ///      - Once a swap triggers a non-zero recapture cut (`rawCutBps > 0`), `referenceTick` advances to `postSwapTick`
-    ///        so subsequent swaps in the same block are only charged on further dislocation beyond `postSwapTick`.
+    ///      - Within the same block, `referenceTick` remains anchored at the block-start `preSwapTick` across all swaps in
+    ///        that block so an arbitrageur cannot split a large dislocation trade into multiple slices (even slices that
+    ///        each trigger a small `rawCutBps > 0`) to reset `referenceTick` and evade recapture.
     function computeCutBps(
         mapping(PoolId => ArbRecaptureState) storage states,
         PoolId poolId,
@@ -74,9 +71,6 @@ library ArbRecaptureLogic {
         uint256 rawCutBps = Math.mulDiv(excessTicks, state.recaptureShareBps, 10_000, Math.Rounding.Floor);
         if (rawCutBps > MAX_ARB_EFFECTIVE_CUT_BPS) {
             rawCutBps = MAX_ARB_EFFECTIVE_CUT_BPS;
-        }
-        if (rawCutBps > 0) {
-            state.referenceTick = postSwapTick;
         }
         effectiveCutBps = uint16(rawCutBps);
     }

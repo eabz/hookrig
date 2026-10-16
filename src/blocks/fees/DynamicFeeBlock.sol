@@ -106,6 +106,7 @@ library DynamicFeeLogic {
             state.lastUpdateBlock = uint32(block.number);
         } else if (absDelta > state.rollingVolatilityTicks) {
             state.rollingVolatilityTicks = (state.rollingVolatilityTicks * 3 + absDelta + 3) / 4;
+            state.lastObservedTick = currentTick;
         }
 
         uint24 threshold = uint24(state.volatilityTickThreshold);

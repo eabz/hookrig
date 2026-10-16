@@ -105,7 +105,8 @@ contract AuditFixesTest is HookRigTestBase {
         vm.prank(owner);
         orchestrator.setTrustedRouter(address(router), false);
 
-        // The router holds no project tokens while afterSwap runs; the sell must not revert
+        // Untrusted routers cannot attribute wallet balances and must revert rather than skip the daily sell cap
+        vm.expectRevert();
         _swapExactIn(bob, key, false, 1_000 ether, "");
     }
 
@@ -493,11 +494,11 @@ contract AuditFixesTest is HookRigTestBase {
         vm.expectRevert();
         _swapExactIn(alice, key, true, 100 ether, "");
 
-        // 3. After WalletCap sunset, untrusted router can swap, contributes to King pot, but NEVER steals King crown!
+        // 3. After WalletCap sunset, untrusted router can swap, but neither pays unclaimable King pot fees nor steals King crown!
         vm.roll(block.number + 101);
         _swapExactIn(alice, key, true, 100 ether, "");
         (, address king, uint256 pot,) = orchestrator.getCurrentKing(poolId);
-        assertGt(pot, 0);
+        assertEq(pot, 0, "untrusted router must not lock unclaimable pot fees");
         assertEq(king, address(0), "untrusted router must not be crowned King");
     }
 

@@ -31,6 +31,8 @@ interface ILaunchCurveState {
 contract LaunchpadVestingWallet is VestingWallet {
     address public immutable curve;
 
+    error CurveNotGraduatedYet();
+
     constructor(address beneficiary, uint64 startTimestamp, uint64 durationSeconds, address _curve)
         VestingWallet(beneficiary, startTimestamp, durationSeconds)
     {
@@ -38,13 +40,17 @@ contract LaunchpadVestingWallet is VestingWallet {
     }
 
     function vestedAmount(address token, uint64 timestamp) public view override returns (uint256) {
-        if (
-            curve != address(0) && timestamp < end()
-                && ILaunchCurveState(curve).launchState() != ITokenLaunchpad.LaunchState.Graduated
-        ) {
+        if (curve != address(0) && ILaunchCurveState(curve).launchState() != ITokenLaunchpad.LaunchState.Graduated) {
             return 0;
         }
         return super.vestedAmount(token, timestamp);
+    }
+
+    function release(address token) public override {
+        if (curve != address(0) && ILaunchCurveState(curve).launchState() != ITokenLaunchpad.LaunchState.Graduated) {
+            revert CurveNotGraduatedYet();
+        }
+        super.release(token);
     }
 }
 

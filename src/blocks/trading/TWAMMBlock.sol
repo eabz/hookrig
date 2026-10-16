@@ -69,25 +69,26 @@ contract TWAMMSwapExecutor is IUnlockCallback {
 
         if (delta.amount0() < 0) {
             cb.key.currency0.settle(poolManager, address(this), uint256(uint128(-delta.amount0())), false);
-        } else if (delta.amount0() > 0) {
-            cb.key.currency0.take(poolManager, hook, uint256(uint128(delta.amount0())), false);
         }
-
         if (delta.amount1() < 0) {
             cb.key.currency1.settle(poolManager, address(this), uint256(uint128(-delta.amount1())), false);
-        } else if (delta.amount1() > 0) {
-            cb.key.currency1.take(poolManager, hook, uint256(uint128(delta.amount1())), false);
         }
 
         int128 inDelta = cb.zeroForOne ? delta.amount0() : delta.amount1();
         int128 outDelta = cb.zeroForOne ? delta.amount1() : delta.amount0();
         uint256 actualIn = inDelta < 0 ? uint256(uint128(-inDelta)) : 0;
-        uint256 actualOut = outDelta > 0 ? uint256(uint128(outDelta)) : 0;
+        uint256 actualOut = 0;
+
+        Currency outputCurrency = cb.zeroForOne ? cb.key.currency1 : cb.key.currency0;
+        if (outDelta > 0) {
+            uint256 nominalOut = uint256(uint128(outDelta));
+            uint256 balBefore = outputCurrency.balanceOf(hook);
+            outputCurrency.take(poolManager, hook, nominalOut, false);
+            actualOut = outputCurrency.balanceOf(hook) - balBefore;
+        }
 
         Currency inputCurrency = cb.zeroForOne ? cb.key.currency0 : cb.key.currency1;
-        uint256 leftover = inputCurrency.isAddressZero()
-            ? address(this).balance
-            : IERC20(Currency.unwrap(inputCurrency)).balanceOf(address(this));
+        uint256 leftover = cb.inputAmount > actualIn ? cb.inputAmount - actualIn : 0;
         if (leftover > 0) {
             inputCurrency.transfer(hook, leftover);
         }
@@ -102,7 +103,7 @@ library TWAMMLogic {
     using CurrencySettler for Currency;
 
     uint64 internal constant MAX_TWAMM_DURATION = 365 days;
-    uint128 internal constant MIN_TWAMM_ORDER_AMOUNT = 1000;
+    uint128 internal constant MIN_TWAMM_ORDER_AMOUNT = 1e15;
     uint256 internal constant MAX_ACTIVE_TWAMM_ORDERS = 256;
 
     struct TWAMMState {
@@ -454,26 +455,62 @@ library TWAMMLogic {
             executor = new TWAMMSwapExecutor(poolManager, address(this));
         }
 
-        TransientContext.setInternalHookExecution(poolId, true);
+        (uint256 netted0, uint256 netted1) = _netOpposingFlows(poolManager, poolId, totalUnswapped0, totalUnswapped1);
 
-        if (totalUnswapped0 > 0) {
-            (uint256 actualIn0, uint256 actualOut0) =
-                _swapVirtualInput(poolManager, key, true, totalUnswapped0, inUnlock, executor);
-            if (actualIn0 > 0) {
-                _distributeDirection(orders, ids, true, totalUnswapped0, actualIn0, actualOut0);
+        {
+            uint256 rem0 = totalUnswapped0 - netted0;
+            uint256 ammIn0 = 0;
+            uint256 ammOut0 = 0;
+            if (rem0 > 0) {
+                (ammIn0, ammOut0) = _swapVirtualInput(poolManager, key, true, rem0, inUnlock, executor);
+            }
+            if (netted0 + ammIn0 > 0) {
+                _distributeDirection(orders, ids, true, totalUnswapped0, netted0 + ammIn0, netted1 + ammOut0);
             }
         }
 
-        if (totalUnswapped1 > 0) {
-            (uint256 actualIn1, uint256 actualOut1) =
-                _swapVirtualInput(poolManager, key, false, totalUnswapped1, inUnlock, executor);
-            if (actualIn1 > 0) {
-                _distributeDirection(orders, ids, false, totalUnswapped1, actualIn1, actualOut1);
+        {
+            uint256 rem1 = totalUnswapped1 - netted1;
+            uint256 ammIn1 = 0;
+            uint256 ammOut1 = 0;
+            if (rem1 > 0) {
+                (ammIn1, ammOut1) = _swapVirtualInput(poolManager, key, false, rem1, inUnlock, executor);
+            }
+            if (netted1 + ammIn1 > 0) {
+                _distributeDirection(orders, ids, false, totalUnswapped1, netted1 + ammIn1, netted0 + ammOut1);
             }
         }
 
-        TransientContext.setInternalHookExecution(poolId, false);
         _pruneSettledOrders(orders, ids);
+    }
+
+    function _netOpposingFlows(
+        IPoolManager poolManager,
+        PoolId poolId,
+        uint256 totalUnswapped0,
+        uint256 totalUnswapped1
+    ) private view returns (uint256 netted0, uint256 netted1) {
+        if (totalUnswapped0 == 0 || totalUnswapped1 == 0) return (0, 0);
+        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, poolId);
+        if (sqrtPriceX96 == 0) return (0, 0);
+
+        uint256 equiv1 = Math.mulDiv(Math.mulDiv(totalUnswapped0, sqrtPriceX96, 1 << 96), sqrtPriceX96, 1 << 96);
+        if (equiv1 > 0 && equiv1 <= totalUnswapped1) {
+            netted1 = equiv1;
+            netted0 = Math.mulDiv(Math.mulDiv(netted1, 1 << 96, sqrtPriceX96), 1 << 96, sqrtPriceX96);
+            if (netted0 > totalUnswapped0) netted0 = totalUnswapped0;
+        } else if (equiv1 > totalUnswapped1) {
+            uint256 equiv0 = Math.mulDiv(Math.mulDiv(totalUnswapped1, 1 << 96, sqrtPriceX96), 1 << 96, sqrtPriceX96);
+            if (equiv0 > totalUnswapped0) equiv0 = totalUnswapped0;
+            if (equiv0 > 0) {
+                netted0 = equiv0;
+                netted1 = Math.mulDiv(Math.mulDiv(netted0, sqrtPriceX96, 1 << 96), sqrtPriceX96, 1 << 96);
+                if (netted1 > totalUnswapped1) netted1 = totalUnswapped1;
+            }
+        }
+        if (netted0 == 0 || netted1 == 0) {
+            return (0, 0);
+        }
     }
 
     function _sumUnswapped(mapping(uint256 => TWAMMOrder) storage orders, uint256[] storage ids)
@@ -506,8 +543,10 @@ library TWAMMLogic {
             TWAMMOrder storage order = orders[ids[j]];
             if (!order.cancelled && order.zeroForOne == zeroForOne && order.streamedAmount > order.swappedInputAmount) {
                 uint256 unswapped = uint256(order.streamedAmount - order.swappedInputAmount);
-                uint256 inShare =
-                    actualIn == totalUnswapped ? unswapped : Math.mulDiv(actualIn, unswapped, totalUnswapped);
+                uint256 inShare = actualIn >= totalUnswapped
+                    ? unswapped
+                    : Math.mulDiv(actualIn, unswapped, totalUnswapped, Math.Rounding.Floor);
+                if (inShare > unswapped) inShare = unswapped;
                 uint256 outShare = Math.mulDiv(actualOut, unswapped, totalUnswapped);
                 order.swappedInputAmount += uint128(inShare);
                 order.claimableOutput += outShare;
@@ -553,20 +592,22 @@ library TWAMMLogic {
 
             if (delta.amount0() < 0) {
                 key.currency0.settle(poolManager, address(this), uint256(uint128(-delta.amount0())), false);
-            } else if (delta.amount0() > 0) {
-                key.currency0.take(poolManager, address(this), uint256(uint128(delta.amount0())), false);
             }
-
             if (delta.amount1() < 0) {
                 key.currency1.settle(poolManager, address(this), uint256(uint128(-delta.amount1())), false);
-            } else if (delta.amount1() > 0) {
-                key.currency1.take(poolManager, address(this), uint256(uint128(delta.amount1())), false);
             }
 
             int128 inDelta = zeroForOne ? delta.amount0() : delta.amount1();
             int128 outDelta = zeroForOne ? delta.amount1() : delta.amount0();
             actualIn = inDelta < 0 ? uint256(uint128(-inDelta)) : 0;
-            actualOut = outDelta > 0 ? uint256(uint128(outDelta)) : 0;
+
+            Currency outputCurrency = zeroForOne ? key.currency1 : key.currency0;
+            if (outDelta > 0) {
+                uint256 nominalOut = uint256(uint128(outDelta));
+                uint256 balBefore = outputCurrency.balanceOf(address(this));
+                outputCurrency.take(poolManager, address(this), nominalOut, false);
+                actualOut = outputCurrency.balanceOf(address(this)) - balBefore;
+            }
         } else {
             Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
             if (inputCurrency.isAddressZero()) {

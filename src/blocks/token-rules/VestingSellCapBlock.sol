@@ -48,9 +48,11 @@ library VestingSellCapLogic {
         uint16 maxBps = configs[poolId].maxDailySellBps;
         if (maxBps == 0 || maxBps >= 10_000 || tokensSold == 0 || projectCurrency.isAddressZero()) return;
 
+        if (sellerIsSwapper) {
+            revert DailyVestingSellCapExceeded(seller, tokensSold, 0);
+        }
+
         uint256 preSellBal = _preSellBalance(manager, projectCurrency, seller, sellerIsSwapper, tokensSold);
-        // The resolved seller holds nothing the hook can attribute (an untrusted router that settles before or after
-        // the swap). Skip rather than brick the sell: a per-wallet cap cannot bind a stateless intermediary.
         if (preSellBal == 0) return;
 
         uint64 currentEpoch = uint64(block.timestamp / 1 days);

@@ -50,6 +50,7 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
     mapping(address => uint256) public buyerSurcharges;
     mapping(address => uint256) public cumulativeTokensBought;
     mapping(address => uint256) public cumulativeTokensSoldByBuyer;
+    bool public stalledRefundActive;
 
     error AlreadyInitialized();
     error CurveNotActive();
@@ -122,7 +123,7 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         nonReentrant
         returns (uint256 tokensOut, uint256 surcharge)
     {
-        if (launchState != LaunchState.ActiveBonding) revert CurveNotActive();
+        if (launchState != LaunchState.ActiveBonding || stalledRefundActive) revert CurveNotActive();
         if (quoteAmountIn == 0) revert ZeroAmount();
         if (recipient == address(0)) recipient = msg.sender;
 
@@ -239,11 +240,15 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         emit CurveSell(msg.sender, tokenAmountIn, quoteOut, realQuoteRaised);
     }
 
-    /// @notice Allows buyers who sold back into a stalled curve after `antiSnipeBlocks` to withdraw their unlocked
-    ///         pro-rata anti-snipe surcharge refund (`S3-F64`).
+    /// @notice Allows buyers who sold back into a fully stalled curve after `antiSnipeBlocks + MAX_ANTI_SNIPE_BLOCKS`
+    ///         (once all active bonding quote has exited) to withdraw their pro-rata anti-snipe surcharge refund (`S3-F64`).
     function claimStalledSurchargeRefund(address recipient) external nonReentrant returns (uint256 refundAmount) {
         if (launchState != LaunchState.ActiveBonding) revert CurveNotActive();
-        if (block.number <= uint256(launchCreationBlock) + uint256(trancheConfig.antiSnipeBlocks)) {
+        if (
+            block.number
+                <= uint256(launchCreationBlock) + uint256(trancheConfig.antiSnipeBlocks) + MAX_ANTI_SNIPE_BLOCKS
+                || curveTokensSold > 0
+        ) {
             revert CurveNotActive();
         }
         uint256 bought = cumulativeTokensBought[msg.sender];
@@ -256,6 +261,7 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         if (refundAmount > totalSurchargeCollected) refundAmount = totalSurchargeCollected;
         if (refundAmount == 0) revert ZeroAmount();
 
+        stalledRefundActive = true;
         buyerSurcharges[msg.sender] = surch - refundAmount;
         totalSurchargeCollected -= refundAmount;
         cumulativeTokensBought[msg.sender] = bought - sold;
@@ -329,7 +335,10 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         int24 tickLower = (TickMath.MIN_TICK / spacing) * spacing;
         int24 tickUpper = (TickMath.MAX_TICK / spacing) * spacing;
 
-        uint256 liquidityEstimate = (Math.sqrt(quoteToSeed * tokensToSeed) * 9999) / 10_000;
+        uint256 baseLiquidity = (quoteToSeed <= type(uint128).max && tokensToSeed <= type(uint128).max)
+            ? Math.sqrt(quoteToSeed * tokensToSeed)
+            : Math.sqrt(quoteToSeed) * Math.sqrt(tokensToSeed);
+        uint256 liquidityEstimate = (baseLiquidity * 9999) / 10_000;
         (BalanceDelta callerDelta,) = poolManager.modifyLiquidity(
             poolKey,
             ModifyLiquidityParams({

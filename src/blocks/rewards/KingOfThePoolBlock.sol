@@ -222,8 +222,10 @@ library KingOfThePoolLogic {
             Math.Rounding rounding = isExactInput ? Math.Rounding.Floor : Math.Rounding.Ceil;
             uint256 maxAllowedTotalCut = Math.mulDiv(grossAmount, 2500, 10_000, rounding);
             uint256 potCut = 0;
-            if (newTotalCut < maxAllowedTotalCut && (st.currentPotAmount == 0 || st.potCurrency == unspecifiedCurrency))
-            {
+            if (
+                newTotalCut < maxAllowedTotalCut && (st.currentPotAmount == 0 || st.potCurrency == unspecifiedCurrency)
+                    && (trader != address(0) || st.currentKing != address(0))
+            ) {
                 potCut = Math.mulDiv(grossAmount, potBps, 10_000, rounding);
                 if (newTotalCut + potCut > maxAllowedTotalCut) {
                     potCut = maxAllowedTotalCut - newTotalCut;

@@ -190,7 +190,8 @@ library HookPermissionMasks {
                             | BIT_JIT_GUARD
                             | LP_DONATION_BLOCKS_MASK
                             | WALLET_RULE_BLOCKS_MASK)) != 0;
-        perms.beforeRemoveLiquidity = (bitmap & (BIT_ORACLE | BIT_MEV_PROTECTION | BIT_JIT_GUARD)) != 0;
+        perms.beforeRemoveLiquidity =
+            (bitmap & (BIT_TWAMM | BIT_ORACLE | BIT_MEV_PROTECTION | BIT_JIT_GUARD)) != 0;
         perms.beforeSwap =
             (bitmap
                         & (BIT_DYNAMIC_FEE

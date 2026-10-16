@@ -247,7 +247,10 @@ contract VirtualXYKLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGuardTr
         int24 tickLower = (TickMath.MIN_TICK / spacing) * spacing;
         int24 tickUpper = (TickMath.MAX_TICK / spacing) * spacing;
 
-        uint256 liquidityEstimate = (Math.sqrt(quoteToSeed * tokensToSeed) * 9999) / 10_000;
+        uint256 baseLiquidity = (quoteToSeed <= type(uint128).max && tokensToSeed <= type(uint128).max)
+            ? Math.sqrt(quoteToSeed * tokensToSeed)
+            : Math.sqrt(quoteToSeed) * Math.sqrt(tokensToSeed);
+        uint256 liquidityEstimate = (baseLiquidity * 9999) / 10_000;
         (BalanceDelta callerDelta,) = poolManager.modifyLiquidity(
             poolKey,
             ModifyLiquidityParams({

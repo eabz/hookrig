@@ -194,7 +194,7 @@ library JITGuardLogic {
 abstract contract JITGuardBlock is IHookRigBlock {
     mapping(PoolId poolId => JITGuardLogic.JITConfig config) internal _jitConfigs;
     mapping(PoolId poolId => mapping(bytes32 positionKey => uint32 addedAtBlock)) internal _lpAddedBlock;
-    mapping(PoolId poolId => mapping(bytes32 key => uint256 trackedLiquidity)) public lpTrackedLiquidity;
+    mapping(PoolId poolId => mapping(bytes32 key => uint256 trackedLiquidity)) internal lpTrackedLiquidity;
 
     uint32 internal constant MAX_LP_HOLD_BLOCKS = 7200; // ~24h ceiling so LPs can never be permanently locked
     uint16 internal constant MAX_JIT_PENALTY_BPS = 5000; // 50.00%
