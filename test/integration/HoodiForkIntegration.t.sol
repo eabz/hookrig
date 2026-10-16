@@ -286,12 +286,10 @@ contract HoodiForkIntegrationTest is Test {
             HookPermissionMasks.BIT_MANAGED_FEE | HookPermissionMasks.BIT_LIMIT_ORDERS | HookPermissionMasks.BIT_TWAMM;
     }
 
-    function _mineHookSalt(
-        address deployer,
-        uint160 flags,
-        bytes memory creationCode,
-        bytes memory constructorArgs
-    ) internal returns (address hookAddress, bytes32 salt) {
+    function _mineHookSalt(address deployer, uint160 flags, bytes memory creationCode, bytes memory constructorArgs)
+        internal
+        returns (address hookAddress, bytes32 salt)
+    {
         vm.pauseGasMetering();
         flags = flags & Hooks.ALL_HOOK_MASK;
         bytes32 initCodeHash = keccak256(abi.encodePacked(creationCode, constructorArgs));

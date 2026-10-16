@@ -128,8 +128,9 @@ library JITGuardLogic {
         uint32 minHold = cfg.minLPHoldBlocks > 0 ? cfg.minLPHoldBlocks : (cfg.jitExitPenaltyBps > 0 ? 1 : 0);
         if (minHold == 0) return;
 
-        bytes32 senderKey =
-            (params.salt == bytes32(0) && lpOwner != sender) ? _ownerKey(sender, lpOwner, params) : _posKey(sender, params);
+        bytes32 senderKey = (params.salt == bytes32(0) && lpOwner != sender)
+            ? _ownerKey(sender, lpOwner, params)
+            : _posKey(sender, params);
         uint32 addedBlock = lpAddedBlock[poolId][senderKey];
         if (lpOwner != sender) {
             uint32 userAdded = lpAddedBlock[poolId][_posKey(lpOwner, params)];
