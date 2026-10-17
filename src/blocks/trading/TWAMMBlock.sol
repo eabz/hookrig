@@ -50,7 +50,9 @@ contract TWAMMSwapExecutor is IUnlockCallback {
         if (msg.sender != hook) revert OnlyHookCaller(msg.sender);
         try poolManager.unlock(
             abi.encode(SwapCallbackData({key: key, zeroForOne: zeroForOne, inputAmount: inputAmount}))
-        ) returns (bytes memory res) {
+        ) returns (
+            bytes memory res
+        ) {
             (actualIn, actualOut) = abi.decode(res, (uint256, uint256));
         } catch {
             Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
@@ -511,8 +513,9 @@ library TWAMMLogic {
         bool inUnlock,
         TWAMMSwapExecutor executor
     ) private returns (uint256 settledIn0, uint256 settledOut0, uint256 settledIn1, uint256 settledOut1) {
-        (settledIn0, settledIn1) =
-            _netOpposingFlows(IHasPoolManager(address(this)).poolManager(), key.toId(), totalUnswapped0, totalUnswapped1);
+        (settledIn0, settledIn1) = _netOpposingFlows(
+            IHasPoolManager(address(this)).poolManager(), key.toId(), totalUnswapped0, totalUnswapped1
+        );
         settledOut0 = settledIn1;
         settledOut1 = settledIn0;
 
@@ -656,14 +659,15 @@ library TWAMMLogic {
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
         if (
             sqrtPriceX96 == 0
-                || (zeroForOne ? sqrtPriceX96 <= TickMath.MIN_SQRT_PRICE + 1 : sqrtPriceX96 >= TickMath.MAX_SQRT_PRICE - 1)
+                || (zeroForOne
+                        ? sqrtPriceX96 <= TickMath.MIN_SQRT_PRICE + 1
+                        : sqrtPriceX96 >= TickMath.MAX_SQRT_PRICE - 1)
         ) {
             return (0, 0);
         }
         if (inUnlock) {
-            (bool ok, bytes memory ret) = address(executor).delegatecall(
-                abi.encodeCall(TWAMMSwapExecutor.trySwapInUnlock, (key, zeroForOne, inputAmount))
-            );
+            (bool ok, bytes memory ret) = address(executor)
+                .delegatecall(abi.encodeCall(TWAMMSwapExecutor.trySwapInUnlock, (key, zeroForOne, inputAmount)));
             if (ok) {
                 (actualIn, actualOut) = abi.decode(ret, (uint256, uint256));
             }
