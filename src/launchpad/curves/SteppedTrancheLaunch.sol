@@ -251,20 +251,16 @@ contract SteppedTrancheLaunch is ITokenLaunchpad, IUnlockCallback, ReentrancyGua
         ) {
             revert CurveNotActive();
         }
-        uint256 bought = cumulativeTokensBought[msg.sender];
-        uint256 sold = cumulativeTokensSoldByBuyer[msg.sender];
         uint256 surch = buyerSurcharges[msg.sender];
-        if (bought == 0 || sold == 0 || surch == 0) revert ZeroAmount();
+        if (surch == 0) revert ZeroAmount();
 
-        refundAmount = Math.mulDiv(surch, sold, bought, Math.Rounding.Floor);
-        if (refundAmount > surch) refundAmount = surch;
-        if (refundAmount > totalSurchargeCollected) refundAmount = totalSurchargeCollected;
+        refundAmount = surch > totalSurchargeCollected ? totalSurchargeCollected : surch;
         if (refundAmount == 0) revert ZeroAmount();
 
         stalledRefundActive = true;
         buyerSurcharges[msg.sender] = surch - refundAmount;
         totalSurchargeCollected -= refundAmount;
-        cumulativeTokensBought[msg.sender] = bought - sold;
+        cumulativeTokensBought[msg.sender] = 0;
         cumulativeTokensSoldByBuyer[msg.sender] = 0;
 
         if (recipient == address(0)) recipient = msg.sender;

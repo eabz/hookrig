@@ -132,8 +132,8 @@ Launch tokens via [`LaunchpadFactory`](./src/launchpad/LaunchpadFactory.sol) wit
 | [**04. Security Mechanics & Caveats**](./docs/04-security-mechanics-and-caveats.md) | Real-world v4 exploit defenses (Cork Protocol, Bunni V2), rounding laws, hard caps, and Medusa verification standards. |
 | [**05. Token Launchpad Mechanics**](./docs/05-token-launch-mechanics.md) | Bonding math, `Create2` address sorting, and graduation security invariants. |
 | [**06. Deployments & Network Integration**](./docs/06-deployments.md) | Ethereum Hoodi (`chainId = 560048`) deployment addresses, `CREATE2` hook salt mining, EIP-170 runtime sizes, and Tier 3 stack combinations (`2,843` valid stacks). |
-| [**Agentic Security Audit Report**](./audit/agentic/2026-10-15.pdf) | Full 5-scan (12-pass) agentic security audit report covering all 288 items (`226 FIXED`, `62 BY-DESIGN`, `0 open`) and test evidence. |
-| [**PROPERTIES.md**](./PROPERTIES.md) | Canonical 56-property invariant specification (`26 Global GL-01..GL-26 + 30 Specific SP-01..SP-30`) verified via Medusa and Foundry. |
+| [**Agentic Security Audit Report**](./audit/agentic/2026-10-15.pdf) | Full 5-scan (12-pass) agentic security audit + 21 Medusa/Echidna stateful fuzzing findings covering all 309 items (`247 FIXED`, `62 BY-DESIGN`, `0 open`) and test evidence. |
+| [**PROPERTIES.md**](./PROPERTIES.md) | Canonical 56-property invariant specification (`26 Global GL-01..GL-26 + 30 Specific SP-01..SP-30`) verified via Medusa (`98/98` routes, `250,000` calls), Echidna (`99/99` targets, `250,641` calls), and Foundry (`100/100` tests). |
 
 ---
 

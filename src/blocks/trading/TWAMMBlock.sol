@@ -27,6 +27,7 @@ contract TWAMMSwapExecutor is IUnlockCallback {
     address public immutable hook;
 
     error OnlyHookCaller(address caller);
+    error ZeroVirtualSwapOutput();
 
     struct SwapCallbackData {
         PoolKey key;
@@ -47,10 +48,15 @@ contract TWAMMSwapExecutor is IUnlockCallback {
         returns (uint256 actualIn, uint256 actualOut)
     {
         if (msg.sender != hook) revert OnlyHookCaller(msg.sender);
-        bytes memory res = poolManager.unlock(
+        try poolManager.unlock(
             abi.encode(SwapCallbackData({key: key, zeroForOne: zeroForOne, inputAmount: inputAmount}))
-        );
-        (actualIn, actualOut) = abi.decode(res, (uint256, uint256));
+        ) returns (bytes memory res) {
+            (actualIn, actualOut) = abi.decode(res, (uint256, uint256));
+        } catch {
+            Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
+            inputCurrency.transfer(hook, inputAmount);
+            return (0, 0);
+        }
     }
 
     function unlockCallback(bytes calldata rawData) external override returns (bytes memory) {
@@ -67,6 +73,10 @@ contract TWAMMSwapExecutor is IUnlockCallback {
             ""
         );
 
+        int128 inDelta = cb.zeroForOne ? delta.amount0() : delta.amount1();
+        int128 outDelta = cb.zeroForOne ? delta.amount1() : delta.amount0();
+        if (inDelta >= 0 || outDelta <= 0) revert ZeroVirtualSwapOutput();
+
         if (delta.amount0() < 0) {
             cb.key.currency0.settle(poolManager, address(this), uint256(uint128(-delta.amount0())), false);
         }
@@ -74,18 +84,13 @@ contract TWAMMSwapExecutor is IUnlockCallback {
             cb.key.currency1.settle(poolManager, address(this), uint256(uint128(-delta.amount1())), false);
         }
 
-        int128 inDelta = cb.zeroForOne ? delta.amount0() : delta.amount1();
-        int128 outDelta = cb.zeroForOne ? delta.amount1() : delta.amount0();
-        uint256 actualIn = inDelta < 0 ? uint256(uint128(-inDelta)) : 0;
-        uint256 actualOut = 0;
-
+        uint256 actualIn = uint256(uint128(-inDelta));
         Currency outputCurrency = cb.zeroForOne ? cb.key.currency1 : cb.key.currency0;
-        if (outDelta > 0) {
-            uint256 nominalOut = uint256(uint128(outDelta));
-            uint256 balBefore = outputCurrency.balanceOf(hook);
-            outputCurrency.take(poolManager, hook, nominalOut, false);
-            actualOut = outputCurrency.balanceOf(hook) - balBefore;
-        }
+        uint256 nominalOut = uint256(uint128(outDelta));
+        uint256 balBefore = outputCurrency.balanceOf(hook);
+        outputCurrency.take(poolManager, hook, nominalOut, false);
+        uint256 actualOut = outputCurrency.balanceOf(hook) - balBefore;
+        if (actualOut == 0) revert ZeroVirtualSwapOutput();
 
         Currency inputCurrency = cb.zeroForOne ? cb.key.currency0 : cb.key.currency1;
         uint256 leftover = cb.inputAmount > actualIn ? cb.inputAmount - actualIn : 0;
@@ -94,6 +99,40 @@ contract TWAMMSwapExecutor is IUnlockCallback {
         }
 
         return abi.encode(actualIn, actualOut);
+    }
+
+    function trySwapInUnlock(PoolKey calldata key, bool zeroForOne, uint256 inputAmount)
+        external
+        returns (uint256 actualIn, uint256 actualOut)
+    {
+        BalanceDelta delta = poolManager.swap(
+            key,
+            SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: -int256(inputAmount),
+                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            ""
+        );
+
+        int128 inDelta = zeroForOne ? delta.amount0() : delta.amount1();
+        int128 outDelta = zeroForOne ? delta.amount1() : delta.amount0();
+        if (inDelta >= 0 || outDelta <= 0) revert ZeroVirtualSwapOutput();
+
+        if (delta.amount0() < 0) {
+            key.currency0.settle(poolManager, address(this), uint256(uint128(-delta.amount0())), false);
+        }
+        if (delta.amount1() < 0) {
+            key.currency1.settle(poolManager, address(this), uint256(uint128(-delta.amount1())), false);
+        }
+
+        actualIn = uint256(uint128(-inDelta));
+        Currency outputCurrency = zeroForOne ? key.currency1 : key.currency0;
+        uint256 nominalOut = uint256(uint128(outDelta));
+        uint256 balBefore = outputCurrency.balanceOf(address(this));
+        outputCurrency.take(poolManager, address(this), nominalOut, false);
+        actualOut = outputCurrency.balanceOf(address(this)) - balBefore;
+        if (actualOut == 0) revert ZeroVirtualSwapOutput();
     }
 }
 
@@ -448,40 +487,69 @@ library TWAMMLogic {
         (uint256 totalUnswapped0, uint256 totalUnswapped1) = _sumUnswapped(orders, ids);
         if (totalUnswapped0 == 0 && totalUnswapped1 == 0) return;
 
-        IPoolManager poolManager = IHasPoolManager(address(this)).poolManager();
-        if (StateLibrary.getLiquidity(poolManager, poolId) == 0) return;
-
-        if (!inUnlock && address(executor) == address(0)) {
-            executor = new TWAMMSwapExecutor(poolManager, address(this));
+        if (address(executor) == address(0)) {
+            executor = new TWAMMSwapExecutor(IHasPoolManager(address(this)).poolManager(), address(this));
         }
 
-        (uint256 netted0, uint256 netted1) = _netOpposingFlows(poolManager, poolId, totalUnswapped0, totalUnswapped1);
+        (uint256 settledIn0, uint256 settledOut0, uint256 settledIn1, uint256 settledOut1) =
+            _executeAmmSwaps(key, totalUnswapped0, totalUnswapped1, inUnlock, executor);
 
-        {
-            uint256 rem0 = totalUnswapped0 - netted0;
-            uint256 ammIn0 = 0;
-            uint256 ammOut0 = 0;
-            if (rem0 > 0) {
-                (ammIn0, ammOut0) = _swapVirtualInput(poolManager, key, true, rem0, inUnlock, executor);
-            }
-            if (netted0 + ammIn0 > 0) {
-                _distributeDirection(orders, ids, true, totalUnswapped0, netted0 + ammIn0, netted1 + ammOut0);
-            }
+        if (settledIn0 > 0) {
+            _distributeDirection(orders, ids, true, totalUnswapped0, settledIn0, settledOut0);
         }
-
-        {
-            uint256 rem1 = totalUnswapped1 - netted1;
-            uint256 ammIn1 = 0;
-            uint256 ammOut1 = 0;
-            if (rem1 > 0) {
-                (ammIn1, ammOut1) = _swapVirtualInput(poolManager, key, false, rem1, inUnlock, executor);
-            }
-            if (netted1 + ammIn1 > 0) {
-                _distributeDirection(orders, ids, false, totalUnswapped1, netted1 + ammIn1, netted0 + ammOut1);
-            }
+        if (settledIn1 > 0) {
+            _distributeDirection(orders, ids, false, totalUnswapped1, settledIn1, settledOut1);
         }
 
         _pruneSettledOrders(orders, ids);
+    }
+
+    function _executeAmmSwaps(
+        PoolKey calldata key,
+        uint256 totalUnswapped0,
+        uint256 totalUnswapped1,
+        bool inUnlock,
+        TWAMMSwapExecutor executor
+    ) private returns (uint256 settledIn0, uint256 settledOut0, uint256 settledIn1, uint256 settledOut1) {
+        (settledIn0, settledIn1) =
+            _netOpposingFlows(IHasPoolManager(address(this)).poolManager(), key.toId(), totalUnswapped0, totalUnswapped1);
+        settledOut0 = settledIn1;
+        settledOut1 = settledIn0;
+
+        if (settledIn0 < totalUnswapped0) {
+            (uint256 in0, uint256 out0) = _swapVirtualInput(key, true, totalUnswapped0 - settledIn0, inUnlock, executor);
+            settledIn0 += in0;
+            settledOut0 += out0;
+        }
+
+        if (settledIn1 < totalUnswapped1) {
+            bool swapped1;
+            {
+                (uint256 in1, uint256 out1) =
+                    _swapVirtualInput(key, false, totalUnswapped1 - settledIn1, inUnlock, executor);
+                settledIn1 += in1;
+                settledOut1 += out1;
+                swapped1 = in1 > 0;
+            }
+
+            if (swapped1 && settledIn0 < totalUnswapped0) {
+                bool swapped0;
+                {
+                    (uint256 extraIn0, uint256 extraOut0) =
+                        _swapVirtualInput(key, true, totalUnswapped0 - settledIn0, inUnlock, executor);
+                    settledIn0 += extraIn0;
+                    settledOut0 += extraOut0;
+                    swapped0 = extraIn0 > 0;
+                }
+
+                if (swapped0 && settledIn1 < totalUnswapped1) {
+                    (uint256 extraIn1, uint256 extraOut1) =
+                        _swapVirtualInput(key, false, totalUnswapped1 - settledIn1, inUnlock, executor);
+                    settledIn1 += extraIn1;
+                    settledOut1 += extraOut1;
+                }
+            }
+        }
     }
 
     function _netOpposingFlows(
@@ -539,14 +607,19 @@ library TWAMMLogic {
         uint256 actualIn,
         uint256 actualOut
     ) private {
+        uint256 remUnswapped = totalUnswapped;
+        uint256 remActualIn = actualIn >= totalUnswapped ? totalUnswapped : actualIn;
         for (uint256 j = 0; j < ids.length; j++) {
             TWAMMOrder storage order = orders[ids[j]];
             if (!order.cancelled && order.zeroForOne == zeroForOne && order.streamedAmount > order.swappedInputAmount) {
                 uint256 unswapped = uint256(order.streamedAmount - order.swappedInputAmount);
-                uint256 inShare = actualIn >= totalUnswapped
-                    ? unswapped
-                    : Math.mulDiv(actualIn, unswapped, totalUnswapped, Math.Rounding.Floor);
+                uint256 inShare = remUnswapped <= unswapped
+                    ? remActualIn
+                    : Math.mulDiv(remActualIn, unswapped, remUnswapped, Math.Rounding.Ceil);
                 if (inShare > unswapped) inShare = unswapped;
+                if (inShare > remActualIn) inShare = remActualIn;
+                remActualIn -= inShare;
+                remUnswapped -= unswapped;
                 uint256 outShare = Math.mulDiv(actualOut, unswapped, totalUnswapped);
                 order.swappedInputAmount += uint128(inShare);
                 order.claimableOutput += outShare;
@@ -572,41 +645,27 @@ library TWAMMLogic {
     }
 
     function _swapVirtualInput(
-        IPoolManager poolManager,
         PoolKey calldata key,
         bool zeroForOne,
         uint256 inputAmount,
         bool inUnlock,
         TWAMMSwapExecutor executor
     ) private returns (uint256 actualIn, uint256 actualOut) {
+        if (inputAmount == 0) return (0, 0);
+        IPoolManager poolManager = IHasPoolManager(address(this)).poolManager();
+        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
+        if (
+            sqrtPriceX96 == 0
+                || (zeroForOne ? sqrtPriceX96 <= TickMath.MIN_SQRT_PRICE + 1 : sqrtPriceX96 >= TickMath.MAX_SQRT_PRICE - 1)
+        ) {
+            return (0, 0);
+        }
         if (inUnlock) {
-            BalanceDelta delta = poolManager.swap(
-                key,
-                SwapParams({
-                    zeroForOne: zeroForOne,
-                    amountSpecified: -int256(inputAmount),
-                    sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
-                }),
-                ""
+            (bool ok, bytes memory ret) = address(executor).delegatecall(
+                abi.encodeCall(TWAMMSwapExecutor.trySwapInUnlock, (key, zeroForOne, inputAmount))
             );
-
-            if (delta.amount0() < 0) {
-                key.currency0.settle(poolManager, address(this), uint256(uint128(-delta.amount0())), false);
-            }
-            if (delta.amount1() < 0) {
-                key.currency1.settle(poolManager, address(this), uint256(uint128(-delta.amount1())), false);
-            }
-
-            int128 inDelta = zeroForOne ? delta.amount0() : delta.amount1();
-            int128 outDelta = zeroForOne ? delta.amount1() : delta.amount0();
-            actualIn = inDelta < 0 ? uint256(uint128(-inDelta)) : 0;
-
-            Currency outputCurrency = zeroForOne ? key.currency1 : key.currency0;
-            if (outDelta > 0) {
-                uint256 nominalOut = uint256(uint128(outDelta));
-                uint256 balBefore = outputCurrency.balanceOf(address(this));
-                outputCurrency.take(poolManager, address(this), nominalOut, false);
-                actualOut = outputCurrency.balanceOf(address(this)) - balBefore;
+            if (ok) {
+                (actualIn, actualOut) = abi.decode(ret, (uint256, uint256));
             }
         } else {
             Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
